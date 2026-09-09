@@ -1359,7 +1359,10 @@ const COLUMN_MAP = {
   password: ['password', 'sifre', 'şifre']
 };
 function normalizeKey(key) {
-  return String(key).trim().toLowerCase()
+  // toLocaleLowerCase('tr') kullanılıyor çünkü standart toLowerCase(),
+  // Türkçe büyük "İ" harfini düz "i" değil farklı bir karaktere çevirir —
+  // bu da "İzleyici", "İzin" gibi kelimelerin tanınmasını engelliyordu.
+  return String(key).trim().toLocaleLowerCase('tr')
     .replace(/ı/g, 'i').replace(/ş/g, 's').replace(/ğ/g, 'g')
     .replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c');
 }
@@ -1400,7 +1403,7 @@ function mapAbsenceRow(rawRow) {
 
 // "Çalışan İzni İzleyici" gibi isimlendirilmiş sayfayı bulur; yoksa son sayfayı dener.
 function findAbsenceSheetName(workbook) {
-  const preferred = workbook.SheetNames.find(n => /izleyici|devam/i.test(n));
+  const preferred = workbook.SheetNames.find(n => /izleyici|devam/.test(normalizeKey(n)));
   return preferred || workbook.SheetNames[workbook.SheetNames.length - 1];
 }
 
