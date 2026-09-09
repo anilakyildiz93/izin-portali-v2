@@ -1409,7 +1409,7 @@ function findAbsenceSheetName(workbook) {
 function parseAbsenceRowsFromSheet(sheet) {
   const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' });
   let headerRowIdx = -1, headers = [];
-  for (let i = 0; i < Math.min(aoa.length, 15); i++) {
+  for (let i = 0; i < Math.min(aoa.length, 30); i++) {
     const normRow = (aoa[i] || []).map(c => normalizeKey(c || ''));
     if (normRow.includes('sicil') && normRow.some(c => c.includes('baslangic'))) {
       headerRowIdx = i; headers = aoa[i]; break;
@@ -1431,27 +1431,53 @@ function parseAbsenceRowsFromSheet(sheet) {
 function parseAbsenceFile(file) {
   state.absenceBulkFileName = file.name;
   state.absenceBulkResults = null;
+  state.absenceBulkRows = [];
+  state.absenceBulkSheetName = '';
   const isCsv = file.name.toLowerCase().endsWith('.csv');
   if (isCsv) {
     Papa.parse(file, {
       header: true, skipEmptyLines: true,
       complete: (res) => {
         state.absenceBulkRows = res.data.map(mapAbsenceRow).filter(r => r.registry_number);
-        state.absenceBulkSheetName = '';
+        if (state.absenceBulkRows.length === 0) {
+          state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: 'Dosyada Sicil sütunu içeren bir başlık satırı bulunamadı.' };
+        }
+        render();
+      },
+      error: (err) => {
+        state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: err.message };
         render();
       }
     });
   } else {
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const wb = XLSX.read(ev.target.result, { type: 'binary' });
-      const sheetName = findAbsenceSheetName(wb);
-      const sheet = wb.Sheets[sheetName];
-      state.absenceBulkRows = parseAbsenceRowsFromSheet(sheet);
-      state.absenceBulkSheetName = sheetName;
+    reader.onerror = () => {
+      state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunamadı. Lütfen tekrar deneyin.' };
       render();
     };
-    reader.readAsBinaryString(file);
+    reader.onload = (ev) => {
+      try {
+        // readAsArrayBuffer + type:'array' büyük/karmaşık xlsx dosyalarında
+        // (koşullu biçimlendirme, veri doğrulama vb. içerenlerde) eski
+        // 'binary' yöntemine göre çok daha güvenilirdir.
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        const sheetName = findAbsenceSheetName(wb);
+        const sheet = wb.Sheets[sheetName];
+        const rows = parseAbsenceRowsFromSheet(sheet);
+        state.absenceBulkSheetName = sheetName;
+        if (rows.length === 0) {
+          state.absenceBulkResults = {
+            addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0,
+            error: `"${sheetName}" sayfasında Sicil / Başlangıç Tarihi sütunlarını içeren bir başlık satırı bulunamadı. Sayfa adını veya sütun başlıklarını kontrol edin.`
+          };
+        }
+        state.absenceBulkRows = rows;
+      } catch (err) {
+        state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunurken hata oluştu: ' + err.message };
+      }
+      render();
+    };
+    reader.readAsArrayBuffer(file);
   }
 }
 
