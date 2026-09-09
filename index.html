@@ -272,7 +272,11 @@ const state = {
   absenceBulkSheetName: '',
   absenceImporting: false,
   absenceBulkResults: null,
-  adminAbsenceSearch: ''
+  adminAbsenceSearch: '',
+  updateBulkRows: [],
+  updateBulkFileName: '',
+  updateImporting: false,
+  updateBulkResults: null
 };
 
 /* =====================================================================
@@ -502,6 +506,7 @@ async function render() {
   } else if (route === '#/admin/import') {
     title = 'Toplu Ekleme';
     subtitle = 'Excel veya CSV dosyasından çalışan aktarın';
+    await loadEmployees();
     content = adminImportView();
   } else if (route === '#/report') {
     title = 'Öneri / Ramak Kala Bildir';
@@ -1286,6 +1291,29 @@ function panelSectionHtml(employees) {
 /* =====================================================================
    ADMIN — ÇALIŞANLAR
    ===================================================================== */
+// Çalışanlar sayfasındaki "Dışa Aktar" butonu: mevcut tüm çalışanları,
+// "Mevcut Çalışanları Güncelle" bölümünün beklediği kolonlarla aynı CSV
+// formatında indirir — böylece indirip Excel'de düzenleyip aynen geri
+// yüklenebilir.
+function exportEmployees() {
+  const header = 'registry_number,first_name,last_name,department,annual_leave_total,annual_leave_used,flexible_hours_start,flexible_hours_end,flexible_work_note';
+  const csvEscape = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = state.employees.map(e => [
+    e.registry_number, e.first_name, e.last_name, e.department,
+    e.annual_leave_total, e.annual_leave_used,
+    e.flexible_hours_start || '', e.flexible_hours_end || '', e.flexible_work_note || ''
+  ].map(csvEscape).join(','));
+  const csv = header + '\n' + lines.join('\n') + '\n';
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `calisanlar-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
 function adminEmployeesView() {
   const q = (state.employeeSearch || '').trim().toLowerCase();
   const filtered = !q ? state.employees : state.employees.filter(e =>
@@ -1320,7 +1348,10 @@ function adminEmployeesView() {
       <input id="employee-search" value="${escapeHtml(state.employeeSearch || '')}" placeholder="İsim, sicil no veya departman ara…"
         class="w-full rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-ink-900 pl-10 pr-3.5 py-2.5 text-sm focus:border-pine-500 focus:ring-1 focus:ring-pine-500 outline-none" />
     </div>
-    <div class="flex shrink-0 gap-2">
+    <div class="flex shrink-0 flex-wrap gap-2">
+      <button data-action="export-employees" class="btn-secondary inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-sm font-medium bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100">
+        <i data-lucide="download" class="w-4 h-4"></i> Dışa Aktar (.csv)
+      </button>
       <button data-action="open-bulk-password-form" class="btn-secondary inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-sm font-medium bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100">
         <i data-lucide="key-round" class="w-4 h-4"></i> Tüm Şifreleri Aynı Yap
       </button>
@@ -1494,6 +1525,53 @@ function absenceDocId(r) {
   return id.slice(0, 400) || null;
 }
 
+// Sicil numaralarını karşılaştırırken baştaki/sondaki boşlukları ve
+// başta gereksiz sıfırları yok sayar (örn. " 64704 " ile "064704" veya
+// "64704" hep aynı çalışan olarak eşleşsin diye).
+function regNorm(v) {
+  return String(v ?? '').trim().replace(/^0+(?=\d)/, '');
+}
+function findEmployeeByRegistry(registryNumber) {
+  const target = regNorm(registryNumber);
+  if (!target) return null;
+  return state.employees.find(e => regNorm(e.registry_number) === target) || null;
+}
+
+// Daha önce, eşleştirme mantığı henüz düzeltilmemişken içeri aktarılmış
+// kayıtların employeeId alanı boş kalmış olabilir. Bu fonksiyon, halihazırda
+// kayıtlı ama bir çalışana bağlanmamış devamsızlık kayıtlarını, sicil
+// numarasına göre tekrar eşleştirip Firestore'da günceller.
+async function reconcileAbsenceEmployeeIds() {
+  state.absenceImporting = true; render();
+  try {
+    const unmatched = state.absences.filter(a => !a.employee_id && a.registry_number);
+    let fixedCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < unmatched.length; i += CHUNK) {
+      const batch = db.batch();
+      let hasWrites = false;
+      unmatched.slice(i, i + CHUNK).forEach(a => {
+        const match = findEmployeeByRegistry(a.registry_number);
+        if (match) {
+          batch.update(db.collection('absences').doc(a.id), {
+            employeeId: match.id,
+            employeeName: a.employee_name || `${match.first_name} ${match.last_name}`
+          });
+          hasWrites = true;
+          fixedCount++;
+        }
+      });
+      if (hasWrites) await batch.commit();
+    }
+    state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, reconciled: fixedCount, unmatchedTotal: unmatched.length };
+    await loadAllAbsences();
+  } catch (err) {
+    state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: err.message };
+  } finally {
+    state.absenceImporting = false; render();
+  }
+}
+
 async function handleAbsenceImport() {
   state.absenceImporting = true; render();
   try {
@@ -1513,7 +1591,7 @@ async function handleAbsenceImport() {
         if (!docId) { invalidCount++; return; }
         if (existingIds.has(docId)) { skippedCount++; return; }
         existingIds.add(docId);
-        const match = state.employees.find(e => e.registry_number === r.registry_number);
+        const match = findEmployeeByRegistry(r.registry_number);
         const ref = db.collection('absences').doc(docId);
         batch.set(ref, {
           registryNumber: r.registry_number,
@@ -1598,9 +1676,19 @@ function adminAbsencesView() {
         <div class="mt-5 rounded-lg ${state.absenceBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.absenceBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
           ${state.absenceBulkResults.error
             ? `Hata: ${escapeHtml(state.absenceBulkResults.error)}`
+            : state.absenceBulkResults.reconciled !== undefined && state.absenceBulkResults.total === 0
+            ? `${state.absenceBulkResults.reconciled} kayıt çalışana bağlandı${state.absenceBulkResults.unmatchedTotal - state.absenceBulkResults.reconciled > 0 ? ` (${state.absenceBulkResults.unmatchedTotal - state.absenceBulkResults.reconciled} kayıt için sistemde bu sicil numarasıyla eşleşen bir çalışan bulunamadı).` : '.'}`
             : `${state.absenceBulkResults.addedCount} yeni kayıt eklendi` +
               (state.absenceBulkResults.skippedCount ? `, ${state.absenceBulkResults.skippedCount} kayıt zaten vardı (atlandı)` : '') +
               (state.absenceBulkResults.invalidCount ? `, ${state.absenceBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
+        </div>` : ''}
+
+      ${state.absences.some(a => !a.employee_id) ? `
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gold-500/10 px-3.5 py-2.5 text-sm text-gold-700 dark:text-gold-400">
+          <span>${state.absences.filter(a => !a.employee_id).length} kayıt henüz bir çalışan hesabına bağlanmamış — bu yüzden çalışan panelinde görünmüyor olabilirler.</span>
+          <button data-action="reconcile-absences" ${state.absenceImporting ? 'disabled' : ''} class="shrink-0 rounded-lg border border-gold-500/40 px-3 py-1.5 text-xs font-medium text-gold-700 dark:text-gold-400 hover:bg-gold-500/10 disabled:opacity-50">
+            ${state.absenceImporting ? 'Onarılıyor…' : 'Eşleştirmeleri Onar'}
+          </button>
         </div>` : ''}
 
       <div class="mt-8">
@@ -1625,7 +1713,7 @@ function adminAbsencesView() {
                 <tbody class="divide-y divide-black/5 dark:divide-white/5">
                   ${shown.map(a => `<tr>
                     <td class="px-3 py-2">
-                      <p class="font-medium text-ink-900 dark:text-sand-50">${escapeHtml(a.employee_name || '—')}</p>
+                      <p class="font-medium text-ink-900 dark:text-sand-50">${escapeHtml(a.employee_name || '—')} ${a.employee_id ? '' : '<span class="ml-1 rounded bg-brick-500/10 px-1.5 py-0.5 text-[10px] font-medium text-brick-600 align-middle">bağlı değil</span>'}</p>
                       <p class="text-[11px] text-ink-800/45 dark:text-sand-100/40">Sicil: ${escapeHtml(a.registry_number)}</p>
                     </td>
                     <td class="px-3 py-2">${escapeHtml(a.leave_type || '')}</td>
@@ -1663,6 +1751,102 @@ function adminAbsencesView() {
       </p>
     </div>
   </div>`;
+}
+
+/* =====================================================================
+   ADMIN — MEVCUT ÇALIŞANLARI TOPLU GÜNCELLEME
+   (Yıllık izin hakkı / kullanılan izin / esnek çalışma saatleri)
+   ===================================================================== */
+const UPDATE_COLUMN_MAP = {
+  registry_number: ['registry_number', 'sicil_no', 'sicil no', 'sicil', 'sicil numarasi'],
+  annual_leave_total: ['annual_leave_total', 'yillik_izin', 'yillik izin hakki', 'izin_hakki', 'toplam hak'],
+  annual_leave_used: ['annual_leave_used', 'kullanilan izin', 'kullanilan'],
+  flexible_hours_start: ['flexible_hours_start', 'esnek baslangic', 'esnek calisma baslangic'],
+  flexible_hours_end: ['flexible_hours_end', 'esnek bitis', 'esnek calisma bitis'],
+  flexible_work_note: ['flexible_work_note', 'esnek not', 'not']
+};
+function mapUpdateRow(rawRow) {
+  const normalized = {};
+  for (const [k, v] of Object.entries(rawRow)) normalized[normalizeKey(k)] = v;
+  const mapped = {};
+  for (const [field, aliases] of Object.entries(UPDATE_COLUMN_MAP)) {
+    const foundKey = aliases.map(normalizeKey).find(a => a in normalized);
+    if (foundKey && normalized[foundKey] !== '' && normalized[foundKey] !== undefined) mapped[field] = normalized[foundKey];
+  }
+  if (mapped.registry_number) mapped.registry_number = String(mapped.registry_number).trim();
+  return mapped;
+}
+function parseUpdateFile(file) {
+  state.updateBulkFileName = file.name;
+  state.updateBulkResults = null;
+  const isCsv = file.name.toLowerCase().endsWith('.csv');
+  if (isCsv) {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: (res) => { state.updateBulkRows = res.data.map(mapUpdateRow).filter(r => r.registry_number); render(); }
+    });
+  } else {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      state.updateBulkResults = { updatedCount: 0, notFoundCount: 0, error: 'Dosya okunamadı.' };
+      render();
+    };
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet, { raw: false, defval: '' });
+        state.updateBulkRows = json.map(mapUpdateRow).filter(r => r.registry_number);
+      } catch (err) {
+        state.updateBulkResults = { updatedCount: 0, notFoundCount: 0, error: 'Dosya okunurken hata oluştu: ' + err.message };
+      }
+      render();
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+async function handleBulkUpdate() {
+  state.updateImporting = true; render();
+  try {
+    const rows = state.updateBulkRows;
+    let updatedCount = 0, notFoundCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = db.batch();
+      let hasWrites = false;
+      rows.slice(i, i + CHUNK).forEach(r => {
+        const match = findEmployeeByRegistry(r.registry_number);
+        if (!match) { notFoundCount++; return; }
+        const payload = {};
+        if (r.annual_leave_total !== undefined) payload.annualLeaveTotal = Number(r.annual_leave_total);
+        if (r.annual_leave_used !== undefined) payload.annualLeaveUsed = Number(r.annual_leave_used);
+        if (r.flexible_hours_start !== undefined) payload.flexibleHoursStart = r.flexible_hours_start;
+        if (r.flexible_hours_end !== undefined) payload.flexibleHoursEnd = r.flexible_hours_end;
+        if (r.flexible_work_note !== undefined) payload.flexibleWorkNote = r.flexible_work_note;
+        if (Object.keys(payload).length === 0) return;
+        batch.update(db.collection('profiles').doc(match.id), payload);
+        hasWrites = true;
+        updatedCount++;
+      });
+      if (hasWrites) await batch.commit();
+    }
+    state.updateBulkResults = { updatedCount, notFoundCount };
+    state.updateBulkRows = [];
+    state.updateBulkFileName = '';
+    await loadEmployees();
+  } catch (err) {
+    state.updateBulkResults = { updatedCount: 0, notFoundCount: 0, error: err.message };
+  } finally {
+    state.updateImporting = false; render();
+  }
+}
+function downloadUpdateTemplate() {
+  const csv = 'registry_number,annual_leave_total,annual_leave_used,flexible_hours_start,flexible_hours_end,flexible_work_note\n64704,27,5,08:00,17:00,Standart mesai\n';
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'calisan-guncelleme-sablonu.csv'; a.click();
+  URL.revokeObjectURL(url);
 }
 
 function adminImportView() {
@@ -1756,6 +1940,48 @@ function adminImportView() {
       </p>
       <button data-action="download-template" class="btn-secondary mt-4 w-full text-xs inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-medium bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100">
         <i data-lucide="download" class="w-[14px] h-[14px]"></i> Şablon İndir (.csv)
+      </button>
+    </div>
+  </div>
+
+  <div class="mt-8 grid gap-5 lg:grid-cols-3">
+    <div class="card p-6 lg:col-span-2 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Mevcut Çalışanları Güncelle</h2>
+      <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">Yıllık izin hakkı, kullanılan izin ve esnek çalışma saatlerini sicil numarasına göre toplu güncelleyin — yeni hesap oluşturmaz, sadece mevcut çalışanları bulup bilgilerini günceller.</p>
+
+      <div id="update-dropzone" class="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl2 border-2 border-dashed border-pine-300 dark:border-pine-700 bg-pine-50/40 dark:bg-pine-900/10 px-6 py-10 text-center transition hover:bg-pine-50 dark:hover:bg-pine-900/20">
+        <i data-lucide="upload-cloud" class="w-7 h-7 text-pine-600 dark:text-pine-400"></i>
+        <p class="mt-2 text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(state.updateBulkFileName) || 'Güncelleme dosyasını sürükleyip bırakın veya tıklayın'}</p>
+        <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">.csv, .xlsx veya .xls desteklenir</p>
+        <input id="update-file-input" type="file" accept=".csv,.xlsx,.xls" class="hidden" />
+      </div>
+
+      ${state.updateBulkRows.length > 0 ? `
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm font-medium text-ink-900 dark:text-sand-50">${state.updateBulkRows.length} satır bulundu</p>
+        <button data-action="import-updates" ${state.updateImporting ? 'disabled' : ''} class="btn-primary inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium bg-pine-600 text-white hover:bg-pine-700 disabled:opacity-50">
+          ${state.updateImporting ? 'Güncelleniyor…' : 'Güncelle'}
+        </button>
+      </div>` : ''}
+
+      ${state.updateBulkResults ? `
+        <div class="mt-4 rounded-lg ${state.updateBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.updateBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
+          ${state.updateBulkResults.error
+            ? `Hata: ${escapeHtml(state.updateBulkResults.error)}`
+            : `${state.updateBulkResults.updatedCount} çalışan güncellendi` + (state.updateBulkResults.notFoundCount ? `, ${state.updateBulkResults.notFoundCount} sicil no sistemde bulunamadı.` : '.')}
+        </div>` : ''}
+    </div>
+
+    <div class="card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-gold-500/10 text-gold-600 dark:text-gold-400">
+        <i data-lucide="file-spreadsheet" class="w-[18px] h-[18px]"></i>
+      </div>
+      <h3 class="mt-3 font-display text-sm font-semibold text-ink-900 dark:text-sand-50">Dosya Formatı</h3>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        <strong>registry_number</strong> zorunlu; <strong>annual_leave_total, annual_leave_used, flexible_hours_start, flexible_hours_end, flexible_work_note</strong> kolonlarından hangilerini eklerseniz sadece onlar güncellenir, boş bıraktıklarınız değişmez.
+      </p>
+      <button data-action="download-update-template" class="btn-secondary mt-4 w-full text-xs inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-medium bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100">
+        <i data-lucide="download" class="w-[14px] h-[14px]"></i> Güncelleme Şablonu İndir (.csv)
       </button>
     </div>
   </div>`;
@@ -2064,6 +2290,10 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'import-absences': await handleAbsenceImport(); break;
+    case 'reconcile-absences': await reconcileAbsenceEmployeeIds(); break;
+    case 'import-updates': await handleBulkUpdate(); break;
+    case 'download-update-template': downloadUpdateTemplate(); break;
+    case 'export-employees': exportEmployees(); break;
     case 'delete-absence': {
       if (confirm('Bu devamsızlık/izin kaydını silmek istediğinize emin misiniz?')) {
         await db.collection('absences').doc(el.dataset.id).delete();
@@ -2387,6 +2617,10 @@ document.addEventListener('click', (e) => {
     const input = document.getElementById('absence-file-input');
     if (input) input.click();
   }
+  if (e.target.closest('#update-dropzone')) {
+    const input = document.getElementById('update-file-input');
+    if (input) input.click();
+  }
 });
 document.addEventListener('input', (e) => {
   if (e.target.id === 'absence-search') {
@@ -2404,6 +2638,10 @@ document.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     if (file) parseAbsenceFile(file);
   }
+  if (e.target.id === 'update-file-input') {
+    const file = e.target.files?.[0];
+    if (file) parseUpdateFile(file);
+  }
   if (e.target.id === 'report-photo-input') {
     const file = e.target.files?.[0];
     if (file) {
@@ -2418,7 +2656,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('dragover', (e) => {
-  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone')) e.preventDefault();
+  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone') || e.target.closest('#update-dropzone')) e.preventDefault();
 });
 document.addEventListener('drop', (e) => {
   const dz = e.target.closest('#dropzone');
@@ -2432,6 +2670,12 @@ document.addEventListener('drop', (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (file) parseAbsenceFile(file);
+  }
+  const udz = e.target.closest('#update-dropzone');
+  if (udz) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) parseUpdateFile(file);
   }
 });
 
