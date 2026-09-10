@@ -62,6 +62,11 @@
   .card { }
   .modal-backdrop { background: rgba(0,0,0,0.4); }
   [data-lucide] { display: inline-block; }
+  .input{width:100%;border-radius:.5rem;border:1px solid rgba(0,0,0,.1);padding:.625rem .875rem;font-size:.875rem;outline:none;background:white}
+  .dark .input{background:#101715;border-color:rgba(255,255,255,.1);color:#f5f1e8}
+  .input:focus{border-color:#205c52;box-shadow:0 0 0 1px #205c52}
+  .label{display:block;font-size:.875rem;font-weight:500;margin-bottom:.375rem;color:#16201d}
+  .dark .label{color:#eadfc8}
 </style>
 </head>
 <body class="bg-sand-50 dark:bg-ink-900 text-ink-900 dark:text-sand-100 transition-colors">
@@ -120,7 +125,10 @@ function normalizeAnnouncement(id, d) {
     id,
     title: d.title,
     content: d.content,
-    published_at: d.publishedAt && d.publishedAt.toDate ? d.publishedAt.toDate().toISOString() : d.publishedAt
+    published_at: d.publishedAt && d.publishedAt.toDate ? d.publishedAt.toDate().toISOString() : d.publishedAt,
+    image_base64: d.imageBase64 || null,
+    attachment_base64: d.attachmentBase64 || null,
+    attachment_name: d.attachmentName || null
   };
 }
 function normalizeAbsence(id, d) {
@@ -277,7 +285,10 @@ const state = {
   updateBulkRows: [],
   updateBulkFileName: '',
   updateImporting: false,
-  updateBulkResults: null
+  updateBulkResults: null,
+  announcementImageBase64: null,
+  announcementAttachmentBase64: null,
+  announcementAttachmentName: null
 };
 
 /* =====================================================================
@@ -323,6 +334,18 @@ function compressImageToBase64(file, maxWidth = 900, quality = 0.6) {
       img.onerror = reject;
       img.src = e.target.result;
     };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Küçük dosyaları (Excel/PDF vb.) base64'e çevirir — Firestore belge boyutu
+// sınırı 1MB olduğu için 700KB üstü dosyalar reddedilir.
+function fileToBase64(file, maxBytes = 500 * 1024) {
+  return new Promise((resolve, reject) => {
+    if (file.size > maxBytes) { reject(new Error(`Dosya çok büyük (maks. ${Math.round(maxBytes / 1024)}KB)`)); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
@@ -910,6 +933,11 @@ function announcementCard(a, editable) {
       </div>` : ''}
     </div>
     <p class="mt-3 whitespace-pre-line text-sm leading-relaxed text-ink-800/80 dark:text-sand-100/75">${escapeHtml(a.content)}</p>
+    ${a.image_base64 ? `<img src="${a.image_base64}" class="mt-3 w-full rounded-lg border border-black/5 dark:border-white/5 max-h-80 object-cover" alt="${escapeHtml(a.title)}" />` : ''}
+    ${a.attachment_base64 ? `
+      <a href="${a.attachment_base64}" download="${escapeHtml(a.attachment_name || 'dosya')}" class="mt-3 flex items-center gap-2 rounded-lg border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-sm font-medium text-pine-700 dark:text-gold-400 hover:bg-pine-50 dark:hover:bg-pine-900/20 w-fit">
+        <i data-lucide="paperclip" class="w-[15px] h-[15px]"></i> ${escapeHtml(a.attachment_name || 'Dosyayı İndir')}
+      </a>` : ''}
   </article>`;
 }
 
@@ -2119,12 +2147,7 @@ function employeeModal(emp) {
         </div>
       </form>
     </div>
-  </div>
-  <style>.input{width:100%;border-radius:.5rem;border:1px solid rgba(0,0,0,.1);padding:.625rem .875rem;font-size:.875rem;outline:none;background:white}
-  .dark .input{background:#101715;border-color:rgba(255,255,255,.1);color:#f5f1e8}
-  .input:focus{border-color:#205c52;box-shadow:0 0 0 1px #205c52}
-  .label{display:block;font-size:.875rem;font-weight:500;margin-bottom:.375rem;color:#16201d}
-  .dark .label{color:#eadfc8}</style>`;
+  </div>`;
 }
 
 function announcementModal(ann) {
@@ -2141,6 +2164,25 @@ function announcementModal(ann) {
         <div><label class="label">Başlık</label><input name="title" required class="input" value="${isEdit ? escapeHtml(ann.title) : ''}" /></div>
         <div><label class="label">İçerik</label><textarea name="content" required rows="5" class="input resize-none">${isEdit ? escapeHtml(ann.content) : ''}</textarea></div>
         <div><label class="label">Yayın Tarihi</label><input name="published_at" type="date" required class="input" value="${dateVal}" /></div>
+        <div>
+          <label class="label">Görsel (opsiyonel)</label>
+          ${state.announcementImageBase64 ? `
+            <div class="relative">
+              <img src="${state.announcementImageBase64}" class="w-full rounded-lg border border-black/10 dark:border-white/10 max-h-48 object-cover" />
+              <button type="button" data-action="remove-announcement-image" class="absolute top-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>` : `
+            <input id="announcement-image-input" type="file" accept="image/*" class="input" />`}
+        </div>
+        <div>
+          <label class="label">Dosya Eki (opsiyonel — Excel, PDF vb.)</label>
+          ${state.announcementAttachmentBase64 ? `
+            <div class="flex items-center justify-between rounded-lg border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-sm">
+              <span class="truncate text-ink-900 dark:text-sand-50">${escapeHtml(state.announcementAttachmentName || 'Dosya')}</span>
+              <button type="button" data-action="remove-announcement-attachment" class="shrink-0 text-ink-800/50 hover:text-brick-600"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>` : `
+            <input id="announcement-attachment-input" type="file" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" class="input" />
+            <p class="mt-1 text-xs text-ink-800/45 dark:text-sand-100/40">Maks. 500KB</p>`}
+        </div>
         <div id="announcement-form-error"></div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" data-action="close-modal" class="btn-secondary inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100">Vazgeç</button>
@@ -2270,9 +2312,16 @@ document.addEventListener('click', async (e) => {
       }
       break;
     }
-    case 'open-announcement-form': state.modal = { type: 'announcement', data: null }; render(); break;
+    case 'open-announcement-form':
+      state.announcementImageBase64 = null;
+      state.announcementAttachmentBase64 = null;
+      state.announcementAttachmentName = null;
+      state.modal = { type: 'announcement', data: null }; render(); break;
     case 'edit-announcement': {
       const ann = state.announcements.find(x => x.id === el.dataset.id);
+      state.announcementImageBase64 = ann?.image_base64 || null;
+      state.announcementAttachmentBase64 = ann?.attachment_base64 || null;
+      state.announcementAttachmentName = ann?.attachment_name || null;
       state.modal = { type: 'announcement', data: ann }; render(); break;
     }
     case 'delete-announcement': {
@@ -2332,6 +2381,9 @@ document.addEventListener('click', async (e) => {
     case 'import-updates': await handleBulkUpdate(); break;
     case 'download-update-template': downloadUpdateTemplate(); break;
     case 'export-employees': exportEmployees(); break;
+    case 'remove-announcement-image': state.announcementImageBase64 = null; render(); break;
+    case 'remove-announcement-attachment':
+      state.announcementAttachmentBase64 = null; state.announcementAttachmentName = null; render(); break;
     case 'delete-absence': {
       if (confirm('Bu devamsızlık/izin kaydını silmek istediğinize emin misiniz?')) {
         await db.collection('absences').doc(el.dataset.id).delete();
@@ -2531,19 +2583,28 @@ document.addEventListener('submit', async (e) => {
     btn.disabled = true; btn.textContent = 'Kaydediliyor…';
 
     const publishedAt = firebase.firestore.Timestamp.fromDate(new Date(fd.get('published_at')));
+    const imageBase64 = state.announcementImageBase64 || null;
+    const attachmentBase64 = state.announcementAttachmentBase64 || null;
+    const attachmentName = state.announcementAttachmentName || null;
     let ok = true;
     try {
       if (id) {
         await db.collection('announcements').doc(id).update({
           title: fd.get('title'),
           content: fd.get('content'),
-          publishedAt
+          publishedAt,
+          imageBase64,
+          attachmentBase64,
+          attachmentName
         });
       } else {
         await db.collection('announcements').add({
           title: fd.get('title'),
           content: fd.get('content'),
           publishedAt,
+          imageBase64,
+          attachmentBase64,
+          attachmentName,
           createdBy: state.session.user.uid,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -2679,6 +2740,23 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'update-file-input') {
     const file = e.target.files?.[0];
     if (file) parseUpdateFile(file);
+  }
+  if (e.target.id === 'announcement-image-input') {
+    const file = e.target.files?.[0];
+    if (file) {
+      compressImageToBase64(file).then(b64 => { state.announcementImageBase64 = b64; render(); })
+        .catch(() => alert('Görsel yüklenemedi.'));
+    }
+  }
+  if (e.target.id === 'announcement-attachment-input') {
+    const file = e.target.files?.[0];
+    if (file) {
+      fileToBase64(file).then(b64 => {
+        state.announcementAttachmentBase64 = b64;
+        state.announcementAttachmentName = file.name;
+        render();
+      }).catch(err => alert(err.message || 'Dosya yüklenemedi.'));
+    }
   }
   if (e.target.id === 'report-photo-input') {
     const file = e.target.files?.[0];
