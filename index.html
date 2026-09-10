@@ -473,7 +473,7 @@ async function render() {
   }
 
   const role = state.profile.role;
-  const adminRoutes = ['#/admin', '#/admin/employees', '#/admin/import', '#/admin/announcements', '#/admin/reports', '#/admin/periodic-checks', '#/admin/absences'];
+  const adminRoutes = ['#/admin', '#/admin/employees', '#/admin/import', '#/admin/update-employees', '#/admin/announcements', '#/admin/reports', '#/admin/periodic-checks', '#/admin/absences'];
 
   if (adminRoutes.includes(route) && role !== 'admin') {
     location.hash = '#/dashboard';
@@ -508,6 +508,11 @@ async function render() {
     subtitle = 'Excel veya CSV dosyasından çalışan aktarın';
     await loadEmployees();
     content = adminImportView();
+  } else if (route === '#/admin/update-employees') {
+    title = 'Çalışan Bilgilerini Güncelle';
+    subtitle = 'Yıllık izin, kullanılan izin ve esnek saatleri toplu güncelleyin';
+    await loadEmployees();
+    content = adminUpdateEmployeesView();
   } else if (route === '#/report') {
     title = 'Öneri / Ramak Kala Bildir';
     subtitle = 'Bir öneriniz veya ramak kala olayınız mı var?';
@@ -564,6 +569,7 @@ function shell(title, subtitle, content, role, route) {
     { href: '#/admin', label: 'Genel Bakış', icon: 'layout-dashboard' },
     { href: '#/admin/employees', label: 'Çalışanlar', icon: 'users' },
     { href: '#/admin/import', label: 'Toplu Ekleme', icon: 'upload-cloud' },
+    { href: '#/admin/update-employees', label: 'Çalışan Güncelle', icon: 'refresh-cw' },
     { href: '#/admin/announcements', label: 'Duyurular', icon: 'megaphone' },
     { href: '#/admin/reports', label: 'Bildirimler', icon: 'alert-triangle' },
     { href: '#/admin/periodic-checks', label: 'Periyodik Kontroller', icon: 'stethoscope' },
@@ -1956,12 +1962,14 @@ function adminImportView() {
         <i data-lucide="download" class="w-[14px] h-[14px]"></i> Şablon İndir (.csv)
       </button>
     </div>
-  </div>
+  </div>`;
+}
 
-  <div class="mt-8 grid gap-5 lg:grid-cols-3">
+function adminUpdateEmployeesView() {
+  return `
+  <div class="grid gap-5 lg:grid-cols-3">
     <div class="card p-6 lg:col-span-2 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
-      <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Mevcut Çalışanları Güncelle</h2>
-      <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">Yıllık izin hakkı, kullanılan izin ve esnek çalışma saatlerini sicil numarasına göre toplu güncelleyin — yeni hesap oluşturmaz, sadece mevcut çalışanları bulup bilgilerini günceller.</p>
+      <p class="text-sm text-ink-800/60 dark:text-sand-100/50">Yıllık izin hakkı, kullanılan izin ve esnek çalışma saatlerini sicil numarasına göre toplu güncelleyin — <strong>yeni hesap oluşturmaz</strong>, sadece mevcut çalışanları bulup bilgilerini günceller.</p>
 
       <div id="update-dropzone" class="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl2 border-2 border-dashed border-pine-300 dark:border-pine-700 bg-pine-50/40 dark:bg-pine-900/10 px-6 py-10 text-center transition hover:bg-pine-50 dark:hover:bg-pine-900/20">
         <i data-lucide="upload-cloud" class="w-7 h-7 text-pine-600 dark:text-pine-400"></i>
@@ -1982,7 +1990,7 @@ function adminImportView() {
         <div class="mt-4 rounded-lg ${state.updateBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.updateBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
           ${state.updateBulkResults.error
             ? `Hata: ${escapeHtml(state.updateBulkResults.error)}`
-            : `${state.updateBulkResults.updatedCount} çalışan güncellendi` + (state.updateBulkResults.notFoundCount ? `, ${state.updateBulkResults.notFoundCount} sicil no sistemde bulunamadı: ${(state.updateBulkResults.notFoundRegistries || []).join(', ')}.` : '.')}
+            : `${state.updateBulkResults.updatedCount} çalışan güncellendi` + (state.updateBulkResults.notFoundCount ? `, ${state.updateBulkResults.notFoundCount} sicil no bulunamadı: ${(state.updateBulkResults.notFoundRegistries || []).join(', ')}.` : '.')}
         </div>` : ''}
     </div>
 
