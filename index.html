@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link
-  href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+  href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=Fraunces:ital,wght@0,500;0,600;1,500&display=swap"
   rel="stylesheet"
 />
 
@@ -21,7 +21,8 @@
       extend: {
         fontFamily: {
           display: ['"Sora"', 'system-ui', 'sans-serif'],
-          body: ['"Inter"', 'system-ui', 'sans-serif']
+          body: ['"Inter"', 'system-ui', 'sans-serif'],
+          hero: ['"Fraunces"', 'Georgia', 'serif']
         },
         colors: {
           pine: {
@@ -594,7 +595,7 @@ function shell(title, subtitle, content, role, route) {
       <div class="flex h-16 items-center justify-between px-5 border-b border-white/10">
         <div class="flex items-center gap-2.5">
           <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gold-500 text-pine-950"><i data-lucide="user-round" class="w-[18px] h-[18px]"></i></div>
-          <span class="font-display font-semibold text-[15px] tracking-tight">İzin Portalı</span>
+          <span class="font-display font-semibold text-[15px] tracking-tight">Line4 İzin Portalı</span>
         </div>
         <button class="lg:hidden text-sand-100/70" data-action="close-sidebar" aria-label="Kapat">
           <i data-lucide="x" class="w-5 h-5"></i>
@@ -655,17 +656,17 @@ function loginScreen() {
       <div class="hidden flex-col justify-between bg-pine-900 p-10 text-sand-100 lg:flex">
         <div class="flex items-center gap-2.5">
           <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gold-500 text-pine-950"><i data-lucide="user-round" class="w-5 h-5"></i></div>
-          <span class="font-display font-semibold tracking-tight">İzin Portalı</span>
+          <span class="font-display font-semibold tracking-tight">Line4 İzin Portalı</span>
         </div>
         <div>
-          <h2 class="font-display text-3xl font-bold leading-tight text-white">
-            İzinlerinizi ve şirket duyurularını<br /> tek bir yerden takip edin.
+          <h2 class="font-hero text-3xl font-medium italic leading-tight text-white">
+            Line4 hattı çalışan Yıllık İzinlerinizi ve şirket duyurularını<br /> tek bir yerden takip edin.
           </h2>
           <p class="mt-4 max-w-sm text-sm text-sand-100/70">
             Yıllık izin bakiyenizi görün, esnek çalışma saatlerinizi kontrol edin ve güncel duyurulardan haberdar olun.
           </p>
         </div>
-        <p class="text-xs text-sand-100/40">© ${new Date().getFullYear()} Şirket Adı</p>
+        <p class="text-xs text-sand-100/40">© B/S/H/ FCLI1 Line4</p>
       </div>
 
       <div class="bg-white dark:bg-ink-800 p-8 sm:p-10">
