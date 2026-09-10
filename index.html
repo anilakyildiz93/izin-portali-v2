@@ -1296,7 +1296,7 @@ function panelSectionHtml(employees) {
 // formatında indirir — böylece indirip Excel'de düzenleyip aynen geri
 // yüklenebilir.
 function exportEmployees() {
-  const header = 'registry_number,first_name,last_name,department,annual_leave_total,annual_leave_used,flexible_hours_start,flexible_hours_end,flexible_work_note';
+  const header = 'registry_number,first_name,last_name,department,annual_leave_total,annual_leave_used,flexible_hours_start,flexible_hours_end,flexible_work_note,flex_time_balance,deducted_hours_balance';
   const csvEscape = (v) => {
     const s = String(v ?? '');
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -1304,7 +1304,8 @@ function exportEmployees() {
   const lines = state.employees.map(e => [
     e.registry_number, e.first_name, e.last_name, e.department,
     e.annual_leave_total, e.annual_leave_used,
-    e.flexible_hours_start || '', e.flexible_hours_end || '', e.flexible_work_note || ''
+    e.flexible_hours_start || '', e.flexible_hours_end || '', e.flexible_work_note || '',
+    e.flex_time_balance ?? 0, e.deducted_hours_balance ?? 0
   ].map(csvEscape).join(','));
   const csv = header + '\n' + lines.join('\n') + '\n';
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -1763,7 +1764,9 @@ const UPDATE_COLUMN_MAP = {
   annual_leave_used: ['annual_leave_used', 'kullanilan izin', 'kullanilan'],
   flexible_hours_start: ['flexible_hours_start', 'esnek baslangic', 'esnek calisma baslangic'],
   flexible_hours_end: ['flexible_hours_end', 'esnek bitis', 'esnek calisma bitis'],
-  flexible_work_note: ['flexible_work_note', 'esnek not', 'not']
+  flexible_work_note: ['flexible_work_note', 'esnek not', 'not'],
+  flex_time_balance: ['flex_time_balance', 'esnek bakiye', 'esnek_bakiye'],
+  deducted_hours_balance: ['deducted_hours_balance', 'kesilen saat bakiyesi', 'kesilen_saat_bakiyesi', 'kesilen saat']
 };
 function mapUpdateRow(rawRow) {
   const normalized = {};
@@ -1805,24 +1808,35 @@ function parseUpdateFile(file) {
     reader.readAsArrayBuffer(file);
   }
 }
+// Excel/CSV'den gelen sayılar bazen virgüllü ondalık olarak gelebilir
+// (örn. "-7,73"). JS'in Number() fonksiyonu bunu NaN'a çevirip sessizce
+// 0 gibi görünmesine yol açıyordu — virgülü noktaya çevirerek düzeltiyoruz.
+function parseNum(v) {
+  if (v === undefined || v === null || v === '') return NaN;
+  const n = Number(String(v).trim().replace(',', '.'));
+  return n;
+}
 async function handleBulkUpdate() {
   state.updateImporting = true; render();
   try {
     const rows = state.updateBulkRows;
     let updatedCount = 0, notFoundCount = 0;
+    const notFoundRegistries = [];
     const CHUNK = 400;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const batch = db.batch();
       let hasWrites = false;
       rows.slice(i, i + CHUNK).forEach(r => {
         const match = findEmployeeByRegistry(r.registry_number);
-        if (!match) { notFoundCount++; return; }
+        if (!match) { notFoundCount++; notFoundRegistries.push(r.registry_number); return; }
         const payload = {};
-        if (r.annual_leave_total !== undefined) payload.annualLeaveTotal = Number(r.annual_leave_total);
-        if (r.annual_leave_used !== undefined) payload.annualLeaveUsed = Number(r.annual_leave_used);
+        if (r.annual_leave_total !== undefined && !isNaN(parseNum(r.annual_leave_total))) payload.annualLeaveTotal = parseNum(r.annual_leave_total);
+        if (r.annual_leave_used !== undefined && !isNaN(parseNum(r.annual_leave_used))) payload.annualLeaveUsed = parseNum(r.annual_leave_used);
         if (r.flexible_hours_start !== undefined) payload.flexibleHoursStart = r.flexible_hours_start;
         if (r.flexible_hours_end !== undefined) payload.flexibleHoursEnd = r.flexible_hours_end;
         if (r.flexible_work_note !== undefined) payload.flexibleWorkNote = r.flexible_work_note;
+        if (r.flex_time_balance !== undefined && !isNaN(parseNum(r.flex_time_balance))) payload.flexTimeBalance = parseNum(r.flex_time_balance);
+        if (r.deducted_hours_balance !== undefined && !isNaN(parseNum(r.deducted_hours_balance))) payload.deductedHoursBalance = parseNum(r.deducted_hours_balance);
         if (Object.keys(payload).length === 0) return;
         batch.update(db.collection('profiles').doc(match.id), payload);
         hasWrites = true;
@@ -1830,7 +1844,7 @@ async function handleBulkUpdate() {
       });
       if (hasWrites) await batch.commit();
     }
-    state.updateBulkResults = { updatedCount, notFoundCount };
+    state.updateBulkResults = { updatedCount, notFoundCount, notFoundRegistries };
     state.updateBulkRows = [];
     state.updateBulkFileName = '';
     await loadEmployees();
@@ -1841,7 +1855,7 @@ async function handleBulkUpdate() {
   }
 }
 function downloadUpdateTemplate() {
-  const csv = 'registry_number,annual_leave_total,annual_leave_used,flexible_hours_start,flexible_hours_end,flexible_work_note\n64704,27,5,08:00,17:00,Standart mesai\n';
+  const csv = 'registry_number,annual_leave_total,annual_leave_used,flexible_hours_start,flexible_hours_end,flexible_work_note,flex_time_balance,deducted_hours_balance\n64704,27,5,08:00,17:00,Standart mesai,0,0\n';
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1968,7 +1982,7 @@ function adminImportView() {
         <div class="mt-4 rounded-lg ${state.updateBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.updateBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
           ${state.updateBulkResults.error
             ? `Hata: ${escapeHtml(state.updateBulkResults.error)}`
-            : `${state.updateBulkResults.updatedCount} çalışan güncellendi` + (state.updateBulkResults.notFoundCount ? `, ${state.updateBulkResults.notFoundCount} sicil no sistemde bulunamadı.` : '.')}
+            : `${state.updateBulkResults.updatedCount} çalışan güncellendi` + (state.updateBulkResults.notFoundCount ? `, ${state.updateBulkResults.notFoundCount} sicil no sistemde bulunamadı: ${(state.updateBulkResults.notFoundRegistries || []).join(', ')}.` : '.')}
         </div>` : ''}
     </div>
 
@@ -1978,7 +1992,7 @@ function adminImportView() {
       </div>
       <h3 class="mt-3 font-display text-sm font-semibold text-ink-900 dark:text-sand-50">Dosya Formatı</h3>
       <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
-        <strong>registry_number</strong> zorunlu; <strong>annual_leave_total, annual_leave_used, flexible_hours_start, flexible_hours_end, flexible_work_note</strong> kolonlarından hangilerini eklerseniz sadece onlar güncellenir, boş bıraktıklarınız değişmez.
+        <strong>registry_number</strong> zorunlu; <strong>annual_leave_total, annual_leave_used, flexible_hours_start, flexible_hours_end, flexible_work_note, flex_time_balance, deducted_hours_balance</strong> kolonlarından hangilerini eklerseniz sadece onlar güncellenir, boş bıraktıklarınız değişmez.
       </p>
       <button data-action="download-update-template" class="btn-secondary mt-4 w-full text-xs inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-medium bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100">
         <i data-lucide="download" class="w-[14px] h-[14px]"></i> Güncelleme Şablonu İndir (.csv)
