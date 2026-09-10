@@ -727,7 +727,10 @@ function employeeDashboardView() {
   return `
   <div class="grid gap-5 lg:grid-cols-3">
     <div class="card p-6 lg:col-span-1 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
-      <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Yıllık İzin Durumu</h2>
+      <div class="flex items-center justify-between">
+        <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Yıllık İzin Durumu</h2>
+        <span class="font-display text-sm font-bold tracking-tight text-pine-700 dark:text-gold-400">Line<span class="text-gold-500">4</span></span>
+      </div>
       <div class="mt-5 flex items-center gap-6">
         <div class="relative h-36 w-36 shrink-0">
           <svg viewBox="0 0 140 140" class="h-full w-full -rotate-90">
