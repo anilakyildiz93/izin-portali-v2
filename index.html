@@ -711,9 +711,17 @@ function loginScreen() {
    ===================================================================== */
 function employeeDashboardView() {
   const p = state.profile;
+  // "Kalan İzin" ve daire grafiği admin panelinde/Excel'den elle güncellenen
+  // resmi sayıya göre hesaplanır — buna dokunulmuyor.
   const remaining = Math.max(p.annual_leave_total - p.annual_leave_used, 0);
   const pct = p.annual_leave_total > 0 ? Math.min(p.annual_leave_used / p.annual_leave_total, 1) : 0;
   const r = 60, circumference = 2 * Math.PI * r, offset = circumference * (1 - pct);
+  // "Kullanılan İzin" yazısı ise Devamsızlık Kayıtları'ndaki (Excel'den
+  // günlük aktarılan) "Yıllık İzin" kayıtlarının toplamından hesaplanır —
+  // ayrı, bilgi amaçlı bir sayı, "Kalan İzin"i etkilemez.
+  const usedFromAbsences = state.myAbsences
+    .filter(a => normalizeKey(a.leave_type).includes('yillik'))
+    .reduce((sum, a) => sum + (Number(a.days) || 0), 0);
   const anns = state.announcements.slice(0, 10);
 
   return `
@@ -734,7 +742,7 @@ function employeeDashboardView() {
           </div>
         </div>
         <dl class="space-y-3 text-sm">
-          <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-gold-500"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kullanılan</dt><dd class="font-semibold">${p.annual_leave_used} gün</dd></div>
+          <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-gold-500"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kullanılan</dt><dd class="font-semibold">${usedFromAbsences} gün</dd></div>
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-sand-200 dark:bg-ink-700"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kalan</dt><dd class="font-semibold">${remaining} gün</dd></div>
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pine-600"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Toplam Hak</dt><dd class="font-semibold">${p.annual_leave_total} gün</dd></div>
         </dl>
@@ -744,7 +752,7 @@ function employeeDashboardView() {
     <div class="space-y-5 lg:col-span-2">
       <div class="grid gap-4 sm:grid-cols-3">
         ${statCard('palmtree', 'Kalan İzin', remaining + ' gün', '', 'gold')}
-        ${statCard('calendar-clock', 'Kullanılan İzin', p.annual_leave_used + ' gün', '', 'pine')}
+        ${statCard('calendar-clock', 'Kullanılan İzin', usedFromAbsences + ' gün', '', 'pine')}
         ${statCard('megaphone', 'Güncel Duyuru', anns.length, 'son 10 duyuru', 'brick')}
       </div>
 
@@ -804,14 +812,19 @@ function employeeDashboardView() {
 
   ${state.myAbsences.length > 0 ? `
   <div class="mt-8 card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
-    <div class="flex items-center gap-3">
-      <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brick-500/10 text-brick-600 dark:text-brick-500">
-        <i data-lucide="calendar-x" class="w-[18px] h-[18px]"></i>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brick-500/10 text-brick-600 dark:text-brick-500">
+          <i data-lucide="calendar-x" class="w-[18px] h-[18px]"></i>
+        </div>
+        <div>
+          <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Devamsızlık / İzin Geçmişim</h2>
+          <p class="text-xs text-ink-800/50 dark:text-sand-100/45">Gelmediğiniz veya izinli olduğunuz günler</p>
+        </div>
       </div>
-      <div>
-        <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Devamsızlık / İzin Geçmişim</h2>
-        <p class="text-xs text-ink-800/50 dark:text-sand-100/45">Gelmediğiniz veya izinli olduğunuz günler</p>
-      </div>
+      <span class="rounded-full bg-gold-500/10 px-3 py-1.5 text-xs font-medium text-gold-700 dark:text-gold-400">
+        Bu listede ${state.myAbsences.filter(a => normalizeKey(a.leave_type).includes('yillik')).reduce((s, a) => s + (Number(a.days) || 0), 0)} gün yıllık izin var
+      </span>
     </div>
     <div class="mt-4 divide-y divide-black/5 dark:divide-white/5">
       ${state.myAbsences.map(a => `
