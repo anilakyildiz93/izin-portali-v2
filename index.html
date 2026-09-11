@@ -293,8 +293,12 @@ async function deleteShiftFile() {
 // tabloya çevirir (indirmeye gerek kalmadan "tam ekran" görüntüleme için).
 function renderShiftTableHtml() {
   if (!state.shiftFileBase64) return '';
+  const name = (state.shiftFileName || '').toLowerCase();
+  if (name.endsWith('.pdf')) {
+    return `<iframe src="${state.shiftFileBase64}" class="w-full rounded-lg border border-black/10 dark:border-white/10" style="height:75vh"></iframe>`;
+  }
   try {
-    const isCsv = (state.shiftFileName || '').toLowerCase().endsWith('.csv');
+    const isCsv = name.endsWith('.csv');
     const b64 = state.shiftFileBase64.split(',')[1];
     const binary = atob(b64);
     let wb;
@@ -1795,8 +1799,8 @@ function adminShiftsView() {
       <div id="shift-dropzone" class="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl2 border-2 border-dashed border-pine-300 dark:border-pine-700 bg-pine-50/40 dark:bg-pine-900/10 px-6 py-10 text-center transition hover:bg-pine-50 dark:hover:bg-pine-900/20">
         <i data-lucide="upload-cloud" class="w-7 h-7 text-pine-600 dark:text-pine-400"></i>
         <p class="mt-2 text-sm font-medium text-ink-900 dark:text-sand-50">${state.shiftFileImporting ? 'Yükleniyor…' : 'Vardiya dosyasını sürükleyip bırakın veya tıklayın'}</p>
-        <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">.xlsx, .xls veya .csv — maks. 700KB</p>
-        <input id="shift-file-input" type="file" accept=".csv,.xlsx,.xls" class="hidden" />
+        <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">.pdf, .xlsx, .xls veya .csv — maks. 700KB</p>
+        <input id="shift-file-input" type="file" accept=".csv,.xlsx,.xls,.pdf" class="hidden" />
       </div>
 
       ${state.shiftFileError ? `<div class="mt-4 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm text-brick-600">${escapeHtml(state.shiftFileError)}</div>` : ''}
