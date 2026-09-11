@@ -49,5 +49,19 @@ service cloud.firestore {
       allow read: if isSignedIn() && (resource.data.employeeId == request.auth.uid || isAdmin());
       allow write: if isAdmin();
     }
+
+    // Devamsızlık / izin izleyici kayıtları: admin ekler/yönetir (toplu içe
+    // aktarma dahil), çalışan sadece kendi kayıtlarını görebilir.
+    match /absences/{absenceId} {
+      allow read: if isSignedIn() && (resource.data.employeeId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Tüm çalışanlarla paylaşılan dosyalar (örn. vardiya listesi): herkes
+    // okuyabilir, sadece admin yükleyip/silebilir.
+    match /sharedFiles/{fileId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
   }
 }
