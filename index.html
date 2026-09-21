@@ -873,6 +873,11 @@ function employeeDashboardView() {
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-sand-200 dark:bg-ink-700"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kalan</dt><dd class="font-semibold">${remaining} gün</dd></div>
         </dl>
       </div>
+      ${remaining <= 0 ? `
+      <div class="mt-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600">
+        <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+        Yıllık izniniz bulunmamaktadır.
+      </div>` : ''}
       <div class="mt-5 flex justify-end">
         <span class="font-display text-2xl font-bold tracking-tight text-pine-700 dark:text-gold-400">Line<span class="text-gold-500">4</span></span>
       </div>
@@ -881,7 +886,7 @@ function employeeDashboardView() {
 
     <div class="space-y-5 lg:col-span-2">
       <div class="grid gap-4 sm:grid-cols-3">
-        ${statCard('palmtree', 'Kalan İzin', remaining + ' gün', '', 'gold')}
+        ${statCard('palmtree', 'Kalan İzin', remaining + ' gün', remaining <= 0 ? 'Yıllık izniniz bulunmamaktadır' : '', remaining <= 0 ? 'brick' : 'gold')}
         ${statCard('calendar-clock', 'Kullanılan İzin', usedFromAbsences + ' gün', '', 'pine')}
         ${statCard('megaphone', 'Güncel Duyuru', anns.length, 'son 10 duyuru', 'brick')}
       </div>
