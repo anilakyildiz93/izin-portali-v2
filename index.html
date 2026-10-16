@@ -164,6 +164,8 @@ function normalizeReport(id, d) {
     status: d.status || 'yeni',
     submitted_by: d.submittedBy,
     submitter_name: d.submitterName,
+    admin_comment: d.adminComment || '',
+    admin_comment_at: d.adminCommentAt && d.adminCommentAt.toDate ? d.adminCommentAt.toDate().toISOString() : d.adminCommentAt,
     created_at: d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toISOString() : d.createdAt
   };
 }
@@ -337,6 +339,8 @@ const state = {
   session: null,
   profile: null,
   loading: true,
+  welcomeDone: false,
+  welcomeTimer: null,
   sidebarOpen: false,
   employees: [],
   announcements: [],
@@ -577,6 +581,19 @@ async function render() {
 
   if (!state.profile) {
     app.innerHTML = loadingScreen('Profil yükleniyor…');
+    return;
+  }
+
+  if (!state.welcomeDone) {
+    app.innerHTML = welcomeScreen();
+    icons();
+    if (!state.welcomeTimer) {
+      state.welcomeTimer = setTimeout(() => {
+        state.welcomeDone = true;
+        state.welcomeTimer = null;
+        render();
+      }, 1900);
+    }
     return;
   }
 
@@ -830,6 +847,46 @@ function loginScreen() {
       </div>
     </div>
   </div>`;
+}
+
+/* =====================================================================
+   HOŞ GELDİNİZ EKRANI (giriş sonrası, panel açılmadan önce)
+   ===================================================================== */
+function welcomeGreetingWord() {
+  const h = new Date().getHours();
+  if (h < 6) return 'İyi geceler';
+  if (h < 12) return 'Günaydın';
+  if (h < 18) return 'İyi günler';
+  return 'İyi akşamlar';
+}
+
+function welcomeScreen() {
+  const p = state.profile || {};
+  const name = escapeHtml(p.first_name || '');
+  return `
+  <div class="flex h-screen flex-col items-center justify-center bg-pine-900 px-4 text-center">
+    <div class="welcome-fade flex flex-col items-center">
+      <div class="mb-6 flex h-14 w-14 items-center justify-center rounded-xl2 bg-gold-500 text-pine-950">
+        <i data-lucide="user-round" class="w-7 h-7"></i>
+      </div>
+      <p class="text-sm font-medium uppercase tracking-wide text-sand-100/60">${welcomeGreetingWord()}</p>
+      <h1 class="mt-2 font-hero text-3xl sm:text-4xl font-medium italic text-white">
+        Hoş geldiniz, ${name} 👋
+      </h1>
+      <p class="mt-4 max-w-sm text-sm text-sand-100/70">
+        Line4 İzin Portalı'na giriş yaptınız. Panelinize yönlendiriliyorsunuz…
+      </p>
+      <button data-action="welcome-continue" class="mt-8 inline-flex items-center gap-2 rounded-lg border border-white/15 px-4 py-2 text-sm font-medium text-sand-100/80 hover:bg-white/5 transition-colors">
+        Hemen devam et
+        <i data-lucide="arrow-right" class="w-4 h-4"></i>
+      </button>
+      <span class="mt-7 font-display text-lg font-semibold text-gold-500">Line4</span>
+    </div>
+  </div>
+  <style>
+    .welcome-fade { animation: welcomeFadeIn .5s ease-out; }
+    @keyframes welcomeFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  </style>`;
 }
 
 /* =====================================================================
@@ -1199,6 +1256,28 @@ function reportCard(r, forAdmin) {
     </div>
     <p class="mt-3 whitespace-pre-line text-sm leading-relaxed text-ink-800/80 dark:text-sand-100/75">${escapeHtml(r.description)}</p>
     ${r.photo ? `<img src="${r.photo}" class="mt-3 max-h-56 rounded-lg border border-black/10 dark:border-white/10" />` : ''}
+    ${forAdmin ? `
+    <div class="mt-4 border-t border-black/5 dark:border-white/5 pt-4">
+      <label class="label flex items-center gap-1.5" for="report-comment-${r.id}">
+        <i data-lucide="message-circle" class="w-3.5 h-3.5"></i> Yöneticiden Yanıt / Geri Bildirim
+      </label>
+      <textarea id="report-comment-${r.id}" rows="2" placeholder="Bu kişiye görünecek bir yanıt yazın…"
+        class="input mt-1.5 w-full resize-none rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-ink-900 px-3.5 py-2.5 text-sm">${escapeHtml(r.admin_comment || '')}</textarea>
+      <div class="mt-2 flex items-center justify-between gap-3">
+        ${r.admin_comment_at ? `<p class="text-[11px] text-ink-800/45 dark:text-sand-100/40">Son yanıt: ${new Date(r.admin_comment_at).toLocaleString('tr-TR')}</p>` : `<span></span>`}
+        <button data-action="save-report-comment" data-id="${r.id}"
+          class="inline-flex items-center gap-1.5 rounded-lg bg-pine-600 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-pine-700 transition-colors">
+          <i data-lucide="send" class="w-3.5 h-3.5"></i> Yanıtı Gönder
+        </button>
+      </div>
+    </div>` : (r.admin_comment ? `
+    <div class="mt-4 rounded-lg border border-pine-500/20 bg-pine-500/[0.06] p-3.5">
+      <p class="flex items-center gap-1.5 text-xs font-semibold text-pine-700 dark:text-pine-400">
+        <i data-lucide="message-circle" class="w-3.5 h-3.5"></i> Yönetici Yanıtı
+      </p>
+      <p class="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-ink-800/80 dark:text-sand-100/75">${escapeHtml(r.admin_comment)}</p>
+      ${r.admin_comment_at ? `<p class="mt-1.5 text-[11px] text-ink-800/45 dark:text-sand-100/40">${new Date(r.admin_comment_at).toLocaleString('tr-TR')}</p>` : ''}
+    </div>` : '')}
   </article>`;
 }
 
@@ -2468,7 +2547,11 @@ document.addEventListener('click', async (e) => {
     case 'open-sidebar': state.sidebarOpen = true; render(); break;
     case 'close-sidebar': state.sidebarOpen = false; render(); break;
     case 'toggle-theme': toggleTheme(); break;
-    case 'logout': await fbAuth.signOut(); break;
+    case 'logout': state.welcomeDone = false; await fbAuth.signOut(); break;
+    case 'welcome-continue': {
+      if (state.welcomeTimer) { clearTimeout(state.welcomeTimer); state.welcomeTimer = null; }
+      state.welcomeDone = true; render(); break;
+    }
     case 'close-modal': state.modal = null; render(); break;
     case 'open-employee-form': state.modal = { type: 'employee', data: null }; render(); break;
     case 'edit-employee': {
@@ -2563,6 +2646,27 @@ document.addEventListener('click', async (e) => {
       if (confirm('Bu devamsızlık/izin kaydını silmek istediğinize emin misiniz?')) {
         await db.collection('absences').doc(el.dataset.id).delete();
         await loadAllAbsences(); render();
+      }
+      break;
+    }
+    case 'save-report-comment': {
+      const id = el.dataset.id;
+      const textarea = document.getElementById(`report-comment-${id}`);
+      const comment = (textarea?.value || '').trim();
+      el.disabled = true;
+      const originalHtml = el.innerHTML;
+      el.innerHTML = 'Kaydediliyor…';
+      try {
+        await db.collection('reports').doc(id).update({
+          adminComment: comment,
+          adminCommentAt: comment ? firebase.firestore.FieldValue.serverTimestamp() : null
+        });
+        await loadAllReports();
+        render();
+      } catch (err) {
+        alert('Yanıt kaydedilemedi: ' + err.message);
+        el.disabled = false;
+        el.innerHTML = originalHtml;
       }
       break;
     }
