@@ -131,6 +131,7 @@ function normalizeAnnouncement(id, d) {
     id,
     title: d.title,
     content: d.content,
+    category: d.category || 'genel',
     published_at: d.publishedAt && d.publishedAt.toDate ? d.publishedAt.toDate().toISOString() : d.publishedAt,
     image_base64: d.imageBase64 || null,
     attachment_base64: d.attachmentBase64 || null,
@@ -355,6 +356,7 @@ const state = {
   reportSubmitting: false,
   reportFormError: '',
   adminReportFilter: 'hepsi',
+  announcementCategoryFilter: 'hepsi',
   periodicChecks: [],
   myPeriodicChecks: [],
   absences: [],
@@ -451,6 +453,13 @@ const STATUS_COLORS = {
   yeni: 'bg-brick-500/10 text-brick-600 dark:text-brick-500',
   inceleniyor: 'bg-gold-500/10 text-gold-600 dark:text-gold-400',
   kapatildi: 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300'
+};
+
+const ANNOUNCEMENT_CATEGORY_LABELS = { genel: 'Genel', vardiya: 'Vardiya', isg: 'İSG' };
+const ANNOUNCEMENT_CATEGORY_COLORS = {
+  genel: 'bg-gold-500/10 text-gold-600 dark:text-gold-400',
+  vardiya: 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300',
+  isg: 'bg-brick-500/10 text-brick-600 dark:text-brick-500'
 };
 
 const CHECK_TYPE_LABELS = {
@@ -1077,7 +1086,10 @@ function announcementCard(a, editable) {
           <i data-lucide="megaphone" class="w-4 h-4"></i>
         </div>
         <div class="min-w-0">
-          <h3 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">${escapeHtml(a.title)}</h3>
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">${escapeHtml(a.title)}</h3>
+            <span class="rounded-full px-2 py-0.5 text-[11px] font-medium ${ANNOUNCEMENT_CATEGORY_COLORS[a.category] || ANNOUNCEMENT_CATEGORY_COLORS.genel}">${ANNOUNCEMENT_CATEGORY_LABELS[a.category] || 'Genel'}</span>
+          </div>
           <p class="mt-0.5 text-xs text-ink-800/50 dark:text-sand-100/45">${fmtDate(a.published_at)}</p>
         </div>
       </div>
@@ -1103,11 +1115,32 @@ function announcementCard(a, editable) {
 /* =====================================================================
    ÇALIŞAN — ÖNERİ / RAMAK KALA BİLDİRİMİ
    ===================================================================== */
+function announcementCategoryFilterBar() {
+  const filter = state.announcementCategoryFilter;
+  const btn = (value, label) => `
+    <button data-action="filter-announcements" data-value="${value}"
+      class="rounded-lg px-3.5 py-2 text-xs font-medium transition-colors ${
+        filter === value
+          ? 'bg-pine-600 text-white'
+          : 'bg-sand-100 text-ink-800 hover:bg-sand-200 dark:bg-ink-700 dark:text-sand-100'
+      }">${label}</button>`;
+  return `
+  <div class="mb-5 flex flex-wrap gap-2">
+    ${btn('hepsi', 'Hepsi')}
+    ${btn('genel', 'Genel')}
+    ${btn('vardiya', 'Vardiya')}
+    ${btn('isg', 'İSG')}
+  </div>`;
+}
+
 function employeeAnnouncementsView() {
-  if (state.announcements.length === 0) {
-    return `<div class="card p-8 text-center text-sm text-ink-800/50 dark:text-sand-100/45 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">Henüz bir duyuru yok.</div>`;
-  }
-  return `<div class="grid gap-4 md:grid-cols-2">${state.announcements.map(a => announcementCard(a, false)).join('')}</div>`;
+  const filter = state.announcementCategoryFilter;
+  const items = filter === 'hepsi' ? state.announcements : state.announcements.filter(a => (a.category || 'genel') === filter);
+  return `
+  ${announcementCategoryFilterBar()}
+  ${items.length === 0
+    ? `<div class="card p-8 text-center text-sm text-ink-800/50 dark:text-sand-100/45 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">Bu kategoride duyuru yok.</div>`
+    : `<div class="grid gap-4 md:grid-cols-2">${items.map(a => announcementCard(a, false)).join('')}</div>`}`;
 }
 
 function employeeShiftsView() {
@@ -2310,15 +2343,17 @@ function adminUpdateEmployeesView() {
    ADMIN — DUYURULAR
    ===================================================================== */
 function adminAnnouncementsView() {
-  const items = state.announcements;
+  const filter = state.announcementCategoryFilter;
+  const items = filter === 'hepsi' ? state.announcements : state.announcements.filter(a => (a.category || 'genel') === filter);
   return `
-  <div class="mb-5 flex justify-end">
+  <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+    ${announcementCategoryFilterBar()}
     <button data-action="open-announcement-form" class="btn-primary inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium bg-pine-600 text-white hover:bg-pine-700">
       <i data-lucide="plus" class="w-4 h-4"></i> Yeni Duyuru
     </button>
   </div>
   ${items.length === 0
-    ? `<div class="card p-10 text-center text-sm text-ink-800/50 dark:text-sand-100/45 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">Henüz duyuru oluşturulmadı.</div>`
+    ? `<div class="card p-10 text-center text-sm text-ink-800/50 dark:text-sand-100/45 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">Bu kategoride duyuru yok.</div>`
     : `<div class="space-y-4">${items.map(a => announcementCard(a, true)).join('')}</div>`}`;
 }
 
@@ -2415,6 +2450,14 @@ function announcementModal(ann) {
       </div>
       <form id="announcement-form" data-id="${isEdit ? ann.id : ''}" class="space-y-4 px-6 py-5">
         <div><label class="label">Başlık</label><input name="title" required class="input" value="${isEdit ? escapeHtml(ann.title) : ''}" /></div>
+        <div>
+          <label class="label">Kategori</label>
+          <select name="category" required class="input">
+            <option value="genel" ${(!isEdit || ann.category === 'genel') ? 'selected' : ''}>Genel</option>
+            <option value="vardiya" ${isEdit && ann.category === 'vardiya' ? 'selected' : ''}>Vardiya</option>
+            <option value="isg" ${isEdit && ann.category === 'isg' ? 'selected' : ''}>İSG</option>
+          </select>
+        </div>
         <div><label class="label">İçerik</label><textarea name="content" required rows="5" class="input resize-none">${isEdit ? escapeHtml(ann.content) : ''}</textarea></div>
         <div><label class="label">Yayın Tarihi</label><input name="published_at" type="date" required class="input" value="${dateVal}" /></div>
         <div>
@@ -2610,6 +2653,10 @@ document.addEventListener('click', async (e) => {
     }
     case 'filter-reports':
       state.adminReportFilter = el.dataset.value;
+      render();
+      break;
+    case 'filter-announcements':
+      state.announcementCategoryFilter = el.dataset.value;
       render();
       break;
     case 'open-periodic-check-form':
@@ -2871,6 +2918,7 @@ document.addEventListener('submit', async (e) => {
         await db.collection('announcements').doc(id).update({
           title: fd.get('title'),
           content: fd.get('content'),
+          category: fd.get('category') || 'genel',
           publishedAt,
           imageBase64,
           attachmentBase64,
@@ -2880,6 +2928,7 @@ document.addEventListener('submit', async (e) => {
         await db.collection('announcements').add({
           title: fd.get('title'),
           content: fd.get('content'),
+          category: fd.get('category') || 'genel',
           publishedAt,
           imageBase64,
           attachmentBase64,
