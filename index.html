@@ -977,10 +977,15 @@ function employeeDashboardView() {
 
   return `
   ${overdueTrainingsCount > 0 ? `
-  <a href="https://www.bshisgegitim.com/login" target="_blank" rel="noopener" class="mb-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600 hover:bg-brick-500/15 transition-colors">
-    <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
-    Süresi geçmiş ${overdueTrainingsCount} eğitiminiz var, lütfen tamamlayın.
-  </a>` : ''}
+  <div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600">
+    <span class="flex items-center gap-2">
+      <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+      Süresi geçmiş ${overdueTrainingsCount} eğitiminiz var, lütfen tamamlayın.
+    </span>
+    <a href="https://www.bshisgegitim.com/login" target="_blank" rel="noopener" class="shrink-0 inline-flex items-center gap-2 rounded-lg bg-brick-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-brick-700 transition-colors">
+      Eğitim sayfasına gitmek için lütfen tıklayın <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+    </a>
+  </div>` : ''}
   <div class="grid gap-5 lg:grid-cols-3">
     <div class="lg:col-span-1 space-y-5">
       <div class="card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
@@ -1246,10 +1251,15 @@ function employeeTrainingsView() {
   const overdueCount = items.filter(t => normalizeKey(t.due_status).includes('gecen')).length;
   return `
   ${overdueCount > 0 ? `
-  <a href="https://www.bshisgegitim.com/login" target="_blank" rel="noopener" class="mb-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600 hover:bg-brick-500/15 transition-colors">
-    <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
-    Süresi geçmiş ${overdueCount} eğitiminiz var, lütfen tamamlayın.
-  </a>` : ''}
+  <div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600">
+    <span class="flex items-center gap-2">
+      <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+      Süresi geçmiş ${overdueCount} eğitiminiz var, lütfen tamamlayın.
+    </span>
+    <a href="https://www.bshisgegitim.com/login" target="_blank" rel="noopener" class="shrink-0 inline-flex items-center gap-2 rounded-lg bg-brick-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-brick-700 transition-colors">
+      Eğitim sayfasına gitmek için lütfen tıklayın <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+    </a>
+  </div>` : ''}
   <div class="space-y-3">
     ${items.map(t => `
     <article class="card p-5 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
