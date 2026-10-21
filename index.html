@@ -152,6 +152,43 @@ function normalizeAbsence(id, d) {
     created_at: d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toISOString() : d.createdAt
   };
 }
+function normalizeTraining(id, d) {
+  return {
+    id,
+    registry_number: d.registryNumber || '',
+    employee_id: d.employeeId || null,
+    employee_name: d.employeeName || '',
+    training_name: d.trainingName || '',
+    completion_status: d.completionStatus || '',
+    assigned_date: d.assignedDate || '',
+    due_status: d.dueStatus || '',
+    incomplete_days: d.incompleteDays ?? null,
+    created_at: d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toISOString() : d.createdAt,
+    updated_at: d.updatedAt && d.updatedAt.toDate ? d.updatedAt.toDate().toISOString() : d.updatedAt
+  };
+}
+async function loadAllTrainings() {
+  try {
+    const snap = await db.collection('trainings').get();
+    state.trainings = snap.docs
+      .map(d => normalizeTraining(d.id, d.data()))
+      .sort((a, b) => (a.employee_name || '').localeCompare(b.employee_name || '', 'tr'));
+  } catch (err) {
+    console.error('Eğitim kayıtları alınamadı:', err.message);
+    state.trainings = [];
+  }
+}
+async function loadMyTrainings(uid) {
+  try {
+    const snap = await db.collection('trainings').where('employeeId', '==', uid).get();
+    state.myTrainings = snap.docs
+      .map(d => normalizeTraining(d.id, d.data()))
+      .sort((a, b) => (a.training_name || '').localeCompare(b.training_name || '', 'tr'));
+  } catch (err) {
+    console.error('Eğitim kayıtları alınamadı:', err.message);
+    state.myTrainings = [];
+  }
+}
 function normalizeReport(id, d) {
   return {
     id,
@@ -367,12 +404,21 @@ const state = {
   absenceImporting: false,
   absenceBulkResults: null,
   adminAbsenceSearch: '',
+  trainings: [],
+  myTrainings: [],
+  trainingBulkRows: [],
+  trainingBulkFileName: '',
+  trainingBulkSheetName: '',
+  trainingImporting: false,
+  trainingBulkResults: null,
+  adminTrainingSearch: '',
   updateBulkRows: [],
   updateBulkFileName: '',
   updateImporting: false,
   updateBulkResults: null,
   announcementImageBase64: null,
   announcementAttachmentBase64: null,
+  expandedAnnouncementPdf: null,
   announcementAttachmentName: null,
   shiftFileBase64: null,
   shiftFileName: null,
@@ -607,7 +653,7 @@ async function render() {
   }
 
   const role = state.profile.role;
-  const adminRoutes = ['#/admin', '#/admin/employees', '#/admin/import', '#/admin/update-employees', '#/admin/announcements', '#/admin/reports', '#/admin/periodic-checks', '#/admin/absences', '#/admin/shifts'];
+  const adminRoutes = ['#/admin', '#/admin/employees', '#/admin/import', '#/admin/update-employees', '#/admin/announcements', '#/admin/reports', '#/admin/periodic-checks', '#/admin/absences', '#/admin/shifts', '#/admin/trainings'];
 
   if (adminRoutes.includes(route) && role !== 'admin') {
     location.hash = '#/dashboard';
@@ -662,6 +708,11 @@ async function render() {
     subtitle = 'Güncel duyuruları görüntüleyin';
     await loadAnnouncements();
     content = employeeAnnouncementsView();
+  } else if (route === '#/trainings') {
+    title = 'Eğitimlerim';
+    subtitle = 'Size atanmış eğitimlerin durumunu görüntüleyin';
+    await loadMyTrainings(state.profile.id);
+    content = employeeTrainingsView();
   } else if (route === '#/admin/shifts') {
     title = 'Vardiya Listesi';
     subtitle = 'Tüm çalışanlarla paylaşılan vardiya dosyasını yönetin';
@@ -687,6 +738,11 @@ async function render() {
     await Promise.all([loadEmployees(), loadAllAbsences()]);
     subtitle = `${state.absences.length} kayıt`;
     content = adminAbsencesView();
+  } else if (route === '#/admin/trainings') {
+    title = 'Eğitim Kayıtları';
+    await Promise.all([loadEmployees(), loadAllTrainings()]);
+    subtitle = `${state.trainings.length} kayıt`;
+    content = adminTrainingsView();
   } else {
     location.hash = role === 'admin' ? '#/admin' : '#/dashboard';
     return;
@@ -714,6 +770,7 @@ function shell(title, subtitle, content, role, route) {
     { href: '#/dashboard', label: 'Panelim', icon: 'layout-dashboard' },
     { href: '#/shifts', label: 'Vardiyalarım', icon: 'calendar-days' },
     { href: '#/announcements', label: 'Duyurular', icon: 'megaphone' },
+    { href: '#/trainings', label: 'Eğitimlerim', icon: 'graduation-cap' },
     { href: '#/report', label: 'Öneri / Ramak Kala', icon: 'alert-triangle' }
   ];
   const adminLinks = [
@@ -725,6 +782,7 @@ function shell(title, subtitle, content, role, route) {
     { href: '#/admin/reports', label: 'Bildirimler', icon: 'alert-triangle' },
     { href: '#/admin/periodic-checks', label: 'Periyodik Kontroller', icon: 'stethoscope' },
     { href: '#/admin/absences', label: 'Devamsızlık Kayıtları', icon: 'calendar-x' },
+    { href: '#/admin/trainings', label: 'Eğitim Kayıtları', icon: 'graduation-cap' },
     { href: '#/admin/shifts', label: 'Vardiya Listesi', icon: 'calendar-days' }
   ];
   const links = role === 'admin' ? adminLinks : employeeLinks;
@@ -1106,9 +1164,16 @@ function announcementCard(a, editable) {
     <p class="mt-3 whitespace-pre-line text-sm leading-relaxed text-ink-800/80 dark:text-sand-100/75">${escapeHtml(a.content)}</p>
     ${a.image_base64 ? `<img src="${a.image_base64}" class="mt-3 w-full rounded-lg border border-black/5 dark:border-white/5 max-h-80 object-cover" alt="${escapeHtml(a.title)}" />` : ''}
     ${a.attachment_base64 ? `
-      <a href="${a.attachment_base64}" download="${escapeHtml(a.attachment_name || 'dosya')}" class="mt-3 flex items-center gap-2 rounded-lg border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-sm font-medium text-pine-700 dark:text-gold-400 hover:bg-pine-50 dark:hover:bg-pine-900/20 w-fit">
-        <i data-lucide="paperclip" class="w-[15px] h-[15px]"></i> ${escapeHtml(a.attachment_name || 'Dosyayı İndir')}
-      </a>` : ''}
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <a href="${a.attachment_base64}" download="${escapeHtml(a.attachment_name || 'dosya')}" class="flex items-center gap-2 rounded-lg border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-sm font-medium text-pine-700 dark:text-gold-400 hover:bg-pine-50 dark:hover:bg-pine-900/20 w-fit">
+          <i data-lucide="paperclip" class="w-[15px] h-[15px]"></i> ${escapeHtml(a.attachment_name || 'Dosyayı İndir')}
+        </a>
+        ${(a.attachment_name || '').toLowerCase().endsWith('.pdf') ? `
+        <button type="button" data-action="toggle-pdf-preview" data-id="${a.id}" class="flex items-center gap-2 rounded-lg border border-black/10 dark:border-white/10 px-3.5 py-2.5 text-sm font-medium text-ink-800 dark:text-sand-100 hover:bg-sand-100 dark:hover:bg-ink-700 w-fit">
+          <i data-lucide="${state.expandedAnnouncementPdf === a.id ? 'eye-off' : 'eye'}" class="w-[15px] h-[15px]"></i> ${state.expandedAnnouncementPdf === a.id ? 'Önizlemeyi Gizle' : 'PDF’i Görüntüle'}
+        </button>` : ''}
+      </div>
+      ${(state.expandedAnnouncementPdf === a.id) ? `<iframe src="${a.attachment_base64}" class="mt-3 w-full rounded-lg border border-black/10 dark:border-white/10" style="height:70vh"></iframe>` : ''}` : ''}
   </article>`;
 }
 
@@ -1161,6 +1226,47 @@ function employeeShiftsView() {
     <div class="mt-5">
       ${renderShiftTableHtml()}
     </div>
+  </div>`;
+}
+
+/* =====================================================================
+   ÇALIŞAN — EĞİTİMLERİM
+   ===================================================================== */
+function employeeTrainingsView() {
+  const items = state.myTrainings;
+  if (items.length === 0) {
+    return `<div class="card p-8 text-center text-sm text-ink-800/50 dark:text-sand-100/45 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">Size atanmış bir eğitim kaydı bulunmuyor.</div>`;
+  }
+  const overdueCount = items.filter(t => normalizeKey(t.due_status).includes('gecen')).length;
+  return `
+  ${overdueCount > 0 ? `
+  <div class="mb-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600">
+    <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+    Süresi geçmiş ${overdueCount} eğitiminiz var, lütfen tamamlayın.
+  </div>` : ''}
+  <div class="space-y-3">
+    ${items.map(t => `
+    <article class="card p-5 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="flex items-start gap-3 min-w-0">
+          <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300">
+            <i data-lucide="graduation-cap" class="w-4 h-4"></i>
+          </div>
+          <div class="min-w-0">
+            <h3 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">${escapeHtml(t.training_name || '—')}</h3>
+            <p class="mt-0.5 text-xs text-ink-800/50 dark:text-sand-100/45">Atanma Tarihi: ${escapeHtml(t.assigned_date || '—')}</p>
+          </div>
+        </div>
+        <div class="flex shrink-0 flex-wrap items-center gap-2">
+          <span class="rounded-full px-2.5 py-1 text-[11px] font-medium ${trainingStatusColor(t.completion_status)}">${escapeHtml(t.completion_status || '—')}</span>
+          <span class="rounded-full px-2.5 py-1 text-[11px] font-medium ${trainingDueColor(t.due_status)}">${escapeHtml(t.due_status || '—')}</span>
+        </div>
+      </div>
+      ${t.incomplete_days !== null && t.incomplete_days !== undefined ? `
+      <p class="mt-3 text-xs text-ink-800/55 dark:text-sand-100/45">
+        ${t.incomplete_days < 0 ? `Süresi geçeli <strong class="text-brick-600">${Math.abs(t.incomplete_days)}</strong> gün oldu.` : `Tamamlanmayan gün: <strong>${t.incomplete_days}</strong>`}
+      </p>` : ''}
+    </article>`).join('')}
   </div>`;
 }
 
@@ -1913,6 +2019,202 @@ async function handleAbsenceImport() {
   }
 }
 
+/* =====================================================================
+   ADMIN — EĞİTİM KAYITLARI İÇE AKTARMA
+   ===================================================================== */
+const TRAINING_COLUMN_MAP = {
+  registry_number: ['sicil', 'sicil no', 'sicil_no', 'registry_number'],
+  employee_name: ['ad soyad', 'ad_soyad', 'calisan adi', 'employee_name', 'isim'],
+  training_name: ['egitim adi', 'egitim_adi', 'egitim', 'training_name'],
+  completion_status: ['tamamlanma durumu', 'tamamlanma_durumu', 'completion_status'],
+  assigned_date: ['atanma tarih', 'atanma tarihi', 'atanma_tarih', 'assigned_date'],
+  due_status: ['termin asimi durumu', 'termin_asimi_durumu', 'termin durumu', 'due_status'],
+  incomplete_days: ['tamamlanmayan gun', 'tamamlanmayan_gun', 'incomplete_days']
+};
+function mapTrainingRow(rawRow) {
+  const normalized = {};
+  for (const [k, v] of Object.entries(rawRow)) normalized[normalizeKey(k)] = v;
+  const mapped = {};
+  for (const [field, aliases] of Object.entries(TRAINING_COLUMN_MAP)) {
+    const foundKey = aliases.map(normalizeKey).find(a => a in normalized);
+    if (foundKey) mapped[field] = normalized[foundKey];
+  }
+  if (mapped.registry_number) mapped.registry_number = String(mapped.registry_number).trim();
+  return mapped;
+}
+function findTrainingSheetName(workbook) {
+  const preferred = workbook.SheetNames.find(n => /egitim/.test(normalizeKey(n)));
+  return preferred || workbook.SheetNames[0];
+}
+// Sayfa içinde "Sicil" ve "Eğitim Adı" içeren başlık satırını bulup
+// altındaki verileri satır nesnelerine çevirir.
+function parseTrainingRowsFromSheet(sheet) {
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' });
+  let headerRowIdx = -1, headers = [];
+  for (let i = 0; i < Math.min(aoa.length, 30); i++) {
+    const normRow = (aoa[i] || []).map(c => normalizeKey(c || ''));
+    if (normRow.includes('sicil') && normRow.some(c => c.includes('egitim'))) {
+      headerRowIdx = i; headers = aoa[i]; break;
+    }
+  }
+  if (headerRowIdx === -1) return [];
+  const rows = [];
+  for (let i = headerRowIdx + 1; i < aoa.length; i++) {
+    const raw = aoa[i];
+    if (!raw || raw.every(c => c === '' || c === undefined || c === null)) continue;
+    const obj = {};
+    headers.forEach((h, idx) => { if (h) obj[h] = raw[idx]; });
+    const mapped = mapTrainingRow(obj);
+    if (mapped.registry_number && mapped.training_name) rows.push(mapped);
+  }
+  return rows;
+}
+function parseTrainingFile(file) {
+  state.trainingBulkFileName = file.name;
+  state.trainingBulkResults = null;
+  state.trainingBulkRows = [];
+  state.trainingBulkSheetName = '';
+  const isCsv = file.name.toLowerCase().endsWith('.csv');
+  if (isCsv) {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: (res) => {
+        state.trainingBulkRows = res.data.map(mapTrainingRow).filter(r => r.registry_number && r.training_name);
+        if (state.trainingBulkRows.length === 0) {
+          state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: 'Dosyada Sicil ve Eğitim Adı sütunlarını içeren bir başlık satırı bulunamadı.' };
+        }
+        render();
+      },
+      error: (err) => {
+        state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: err.message };
+        render();
+      }
+    });
+  } else {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunamadı. Lütfen tekrar deneyin.' };
+      render();
+    };
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        const sheetName = findTrainingSheetName(wb);
+        const sheet = wb.Sheets[sheetName];
+        const rows = parseTrainingRowsFromSheet(sheet);
+        state.trainingBulkSheetName = sheetName;
+        if (rows.length === 0) {
+          state.trainingBulkResults = {
+            addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0,
+            error: `"${sheetName}" sayfasında Sicil / Eğitim Adı sütunlarını içeren bir başlık satırı bulunamadı. Sayfa adını veya sütun başlıklarını kontrol edin.`
+          };
+        }
+        state.trainingBulkRows = rows;
+      } catch (err) {
+        state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunurken hata oluştu: ' + err.message };
+      }
+      render();
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+// Bir eğitim ataması için, aynı çalışan + aynı eğitim adı + aynı atanma
+// tarihi tekrar yüklendiğinde AYNI belge kimliğini üretir. Böylece Excel'i
+// her gün olduğu gibi yeniden yüklemek güvenlidir: tamamlanma durumu veya
+// kalan gün gibi değişen bilgiler güncellenir, kopya satır oluşmaz.
+function trainingDocId(r) {
+  const slug = s => normalizeKey(s || '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const id = `${slug(r.registry_number)}_${slug(r.training_name)}_${slug(r.assigned_date)}`;
+  return id.slice(0, 400) || null;
+}
+async function handleTrainingImport() {
+  state.trainingImporting = true; render();
+  try {
+    if (state.trainings.length === 0) await loadAllTrainings();
+    const existingIds = new Set(state.trainings.map(t => t.id));
+
+    const rows = state.trainingBulkRows;
+    let addedCount = 0, updatedCount = 0, invalidCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = db.batch();
+      let batchHasWrites = false;
+      rows.slice(i, i + CHUNK).forEach(r => {
+        const docId = trainingDocId(r);
+        if (!docId) { invalidCount++; return; }
+        const isNew = !existingIds.has(docId);
+        existingIds.add(docId);
+        const match = findEmployeeByRegistry(r.registry_number);
+        const ref = db.collection('trainings').doc(docId);
+        batch.set(ref, {
+          registryNumber: r.registry_number,
+          employeeId: match ? match.id : null,
+          employeeName: r.employee_name || (match ? `${match.first_name} ${match.last_name}` : ''),
+          trainingName: r.training_name || '',
+          completionStatus: r.completion_status || '',
+          assignedDate: r.assigned_date || '',
+          dueStatus: r.due_status || '',
+          incompleteDays: r.incomplete_days !== undefined && r.incomplete_days !== '' ? Number(r.incomplete_days) : null,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          ...(isNew ? { createdAt: firebase.firestore.FieldValue.serverTimestamp() } : {})
+        }, { merge: true });
+        batchHasWrites = true;
+        if (isNew) addedCount++; else updatedCount++;
+      });
+      if (batchHasWrites) await batch.commit();
+    }
+    state.trainingBulkResults = { addedCount, updatedCount, invalidCount, total: rows.length };
+    state.trainingBulkRows = [];
+    state.trainingBulkFileName = '';
+    await loadAllTrainings();
+  } catch (err) {
+    state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: state.trainingBulkRows.length, error: err.message };
+  } finally {
+    state.trainingImporting = false; render();
+  }
+}
+async function reconcileTrainingEmployeeIds() {
+  state.trainingImporting = true; render();
+  try {
+    const unmatched = state.trainings.filter(t => !t.employee_id && t.registry_number);
+    let fixedCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < unmatched.length; i += CHUNK) {
+      const batch = db.batch();
+      let hasWrites = false;
+      unmatched.slice(i, i + CHUNK).forEach(t => {
+        const match = findEmployeeByRegistry(t.registry_number);
+        if (match) {
+          batch.update(db.collection('trainings').doc(t.id), {
+            employeeId: match.id,
+            employeeName: t.employee_name || `${match.first_name} ${match.last_name}`
+          });
+          hasWrites = true;
+          fixedCount++;
+        }
+      });
+      if (hasWrites) await batch.commit();
+    }
+    state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, reconciled: fixedCount, unmatchedTotal: unmatched.length };
+    await loadAllTrainings();
+  } catch (err) {
+    state.trainingBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: err.message };
+  } finally {
+    state.trainingImporting = false; render();
+  }
+}
+function trainingStatusColor(status) {
+  const n = normalizeKey(status || '');
+  if (n.includes('tamamlandi')) return 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300';
+  return 'bg-brick-500/10 text-brick-600 dark:text-brick-500';
+}
+function trainingDueColor(status) {
+  const n = normalizeKey(status || '');
+  if (n.includes('gecen')) return 'bg-brick-500/10 text-brick-600 dark:text-brick-500';
+  if (n.includes('devam')) return 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300';
+  return 'bg-sand-100 text-ink-800 dark:bg-ink-700 dark:text-sand-100';
+}
+
 function adminShiftsView() {
   return `
   <div class="grid gap-5 lg:grid-cols-3">
@@ -2085,6 +2387,141 @@ function adminAbsencesView() {
       </p>
       <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
         <strong>Her gün aynı dosyayı yeniden yükleyebilirsiniz</strong> — daha önce aktarılmış satırlar otomatik atlanır, sadece yeni eklenen satırlar sisteme girer.
+      </p>
+    </div>
+  </div>`;
+}
+
+/* =====================================================================
+   ADMIN — EĞİTİM KAYITLARI
+   ===================================================================== */
+function adminTrainingsView() {
+  const search = normalizeKey(state.adminTrainingSearch || '');
+  const filtered = search
+    ? state.trainings.filter(t => normalizeKey(t.employee_name).includes(search) || normalizeKey(t.registry_number).includes(search) || normalizeKey(t.training_name).includes(search))
+    : state.trainings;
+  const shown = filtered.slice(0, 300);
+
+  return `
+  <div class="grid gap-5 lg:grid-cols-3">
+    <div class="card p-6 lg:col-span-2 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <div id="training-dropzone" class="flex cursor-pointer flex-col items-center justify-center rounded-xl2 border-2 border-dashed border-pine-300 dark:border-pine-700 bg-pine-50/40 dark:bg-pine-900/10 px-6 py-10 text-center transition hover:bg-pine-50 dark:hover:bg-pine-900/20">
+        <i data-lucide="upload-cloud" class="w-7 h-7 text-pine-600 dark:text-pine-400"></i>
+        <p class="mt-2 text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(state.trainingBulkFileName) || 'Eğitim takip Excel dosyasını sürükleyip bırakın veya tıklayın'}</p>
+        <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">.xlsx, .xls veya .csv desteklenir</p>
+        <input id="training-file-input" type="file" accept=".csv,.xlsx,.xls" class="hidden" />
+      </div>
+
+      ${state.trainingBulkRows.length > 0 ? `
+      <div class="mt-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <p class="text-sm font-medium text-ink-900 dark:text-sand-50">
+            ${state.trainingBulkRows.length} satır bulundu ${state.trainingBulkSheetName ? `(sayfa: "${escapeHtml(state.trainingBulkSheetName)}")` : ''}
+          </p>
+          <button data-action="import-trainings" ${state.trainingImporting ? 'disabled' : ''} class="btn-primary inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium bg-pine-600 text-white hover:bg-pine-700 disabled:opacity-50">
+            ${state.trainingImporting ? 'Aktarılıyor…' : 'İçeri Aktar'}
+          </button>
+        </div>
+        <div class="mt-3 overflow-auto rounded-lg border border-black/5 dark:border-white/5">
+          <table class="w-full min-w-[700px] text-left text-xs">
+            <thead class="bg-sand-50 dark:bg-ink-900"><tr class="text-ink-800/50 dark:text-sand-100/45">
+              <th class="px-2 py-2 font-medium">Sicil</th>
+              <th class="px-2 py-2 font-medium">Ad</th>
+              <th class="px-2 py-2 font-medium">Eğitim</th>
+              <th class="px-2 py-2 font-medium">Durum</th>
+              <th class="px-2 py-2 font-medium">Atanma</th>
+              <th class="px-2 py-2 font-medium">Termin</th>
+            </tr></thead>
+            <tbody class="divide-y divide-black/5 dark:divide-white/5">
+              ${state.trainingBulkRows.slice(0, 20).map(r => `<tr>
+                <td class="px-2 py-1.5">${escapeHtml(r.registry_number || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.employee_name || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.training_name || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.completion_status || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.assigned_date || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.due_status || '')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          ${state.trainingBulkRows.length > 20 ? `<p class="px-2 py-2 text-xs text-ink-800/45 dark:text-sand-100/40">…ve ${state.trainingBulkRows.length - 20} satır daha</p>` : ''}
+        </div>
+      </div>` : ''}
+
+      ${state.trainingBulkResults ? `
+        <div class="mt-5 rounded-lg ${state.trainingBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.trainingBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
+          ${state.trainingBulkResults.error
+            ? `Hata: ${escapeHtml(state.trainingBulkResults.error)}`
+            : state.trainingBulkResults.reconciled !== undefined && state.trainingBulkResults.total === 0
+            ? `${state.trainingBulkResults.reconciled} kayıt çalışana bağlandı${state.trainingBulkResults.unmatchedTotal - state.trainingBulkResults.reconciled > 0 ? ` (${state.trainingBulkResults.unmatchedTotal - state.trainingBulkResults.reconciled} kayıt için sistemde bu sicil numarasıyla eşleşen bir çalışan bulunamadı).` : '.'}`
+            : `${state.trainingBulkResults.addedCount} yeni kayıt eklendi` +
+              (state.trainingBulkResults.updatedCount ? `, ${state.trainingBulkResults.updatedCount} kayıt güncellendi` : '') +
+              (state.trainingBulkResults.invalidCount ? `, ${state.trainingBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
+        </div>` : ''}
+
+      ${state.trainings.some(t => !t.employee_id) ? `
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gold-500/10 px-3.5 py-2.5 text-sm text-gold-700 dark:text-gold-400">
+          <span>${state.trainings.filter(t => !t.employee_id).length} kayıt henüz bir çalışan hesabına bağlanmamış — bu yüzden çalışan panelinde görünmüyor olabilirler.</span>
+          <button data-action="reconcile-trainings" ${state.trainingImporting ? 'disabled' : ''} class="shrink-0 rounded-lg border border-gold-500/40 px-3 py-1.5 text-xs font-medium text-gold-700 dark:text-gold-400 hover:bg-gold-500/10 disabled:opacity-50">
+            ${state.trainingImporting ? 'Onarılıyor…' : 'Eşleştirmeleri Onar'}
+          </button>
+        </div>` : ''}
+
+      <div class="mt-8">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Kayıtlı Eğitimler</h2>
+          <input id="training-search" type="text" value="${escapeHtml(state.adminTrainingSearch || '')}" placeholder="Ad, sicil no veya eğitim adıyla ara…"
+            class="input w-64 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-ink-900 px-3 py-2 text-sm" />
+        </div>
+        ${filtered.length === 0
+          ? `<p class="mt-4 text-sm text-ink-800/50 dark:text-sand-100/45">Kayıt bulunamadı.</p>`
+          : `<div class="mt-3 overflow-auto rounded-lg border border-black/5 dark:border-white/5">
+              <table class="w-full min-w-[820px] text-left text-xs">
+                <thead class="bg-sand-50 dark:bg-ink-900"><tr class="text-ink-800/50 dark:text-sand-100/45">
+                  <th class="px-3 py-2.5 font-medium">Çalışan</th>
+                  <th class="px-3 py-2.5 font-medium">Eğitim</th>
+                  <th class="px-3 py-2.5 font-medium">Durum</th>
+                  <th class="px-3 py-2.5 font-medium">Atanma</th>
+                  <th class="px-3 py-2.5 font-medium">Termin</th>
+                  <th class="px-3 py-2.5 font-medium">Kalan/Aşan Gün</th>
+                  <th class="px-3 py-2.5 font-medium"></th>
+                </tr></thead>
+                <tbody class="divide-y divide-black/5 dark:divide-white/5">
+                  ${shown.map(t => `<tr>
+                    <td class="px-3 py-2">
+                      <p class="font-medium text-ink-900 dark:text-sand-50">${escapeHtml(t.employee_name || '—')} ${t.employee_id ? '' : '<span class="ml-1 rounded bg-brick-500/10 px-1.5 py-0.5 text-[10px] font-medium text-brick-600 align-middle">bağlı değil</span>'}</p>
+                      <p class="text-[11px] text-ink-800/45 dark:text-sand-100/40">Sicil: ${escapeHtml(t.registry_number)}</p>
+                    </td>
+                    <td class="px-3 py-2">${escapeHtml(t.training_name || '')}</td>
+                    <td class="px-3 py-2"><span class="rounded-full px-2 py-0.5 text-[11px] font-medium ${trainingStatusColor(t.completion_status)}">${escapeHtml(t.completion_status || '—')}</span></td>
+                    <td class="px-3 py-2 whitespace-nowrap">${escapeHtml(t.assigned_date || '')}</td>
+                    <td class="px-3 py-2"><span class="rounded-full px-2 py-0.5 text-[11px] font-medium ${trainingDueColor(t.due_status)}">${escapeHtml(t.due_status || '—')}</span></td>
+                    <td class="px-3 py-2">${t.incomplete_days ?? ''}</td>
+                    <td class="px-3 py-2">
+                      <button data-action="delete-training" data-id="${t.id}" class="flex h-7 w-7 items-center justify-center rounded text-ink-800/40 hover:bg-brick-500/10 hover:text-brick-600 dark:text-sand-100/40" aria-label="Sil">
+                        <i data-lucide="trash-2" class="w-[13px] h-[13px]"></i>
+                      </button>
+                    </td>
+                  </tr>`).join('')}
+                </tbody>
+              </table>
+              ${filtered.length > shown.length ? `<p class="px-3 py-2 text-xs text-ink-800/45 dark:text-sand-100/40">${filtered.length} kayıttan ilk ${shown.length} tanesi gösteriliyor — daraltmak için arama kullanın.</p>` : ''}
+            </div>`}
+      </div>
+    </div>
+
+    <div class="card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-gold-500/10 text-gold-600 dark:text-gold-400">
+        <i data-lucide="file-spreadsheet" class="w-[18px] h-[18px]"></i>
+      </div>
+      <h3 class="mt-3 font-display text-sm font-semibold text-ink-900 dark:text-sand-50">Dosya Formatı</h3>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        Eğitim takip çalışma sayfanızdaki <strong>Sicil No, Ad Soyad, Eğitim Adı, Tamamlanma Durumu, Atanma Tarih, Termin Aşımı Durumu, Tamamlanmayan Gün</strong> sütunları otomatik tanınır.
+      </p>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        Sicil numarası sistemdeki bir çalışanla eşleşirse kayıt o çalışanın panelinde de görünür.
+      </p>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        <strong>Her gün aynı dosyayı yeniden yükleyebilirsiniz</strong> — aynı çalışan + aynı eğitim + aynı atanma tarihine sahip satırlar güncellenir (durum ve kalan gün bilgisi tazelenir), kopya kayıt oluşmaz.
       </p>
     </div>
   </div>`;
@@ -2477,7 +2914,7 @@ function announcementModal(ann) {
               <button type="button" data-action="remove-announcement-attachment" class="shrink-0 text-ink-800/50 hover:text-brick-600"><i data-lucide="x" class="w-4 h-4"></i></button>
             </div>` : `
             <input id="announcement-attachment-input" type="file" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" class="input" />
-            <p class="mt-1 text-xs text-ink-800/45 dark:text-sand-100/40">Maks. 500KB</p>`}
+            <p class="mt-1 text-xs text-ink-800/45 dark:text-sand-100/40">Maks. 700KB (PDF dahil)</p>`}
         </div>
         <div id="announcement-form-error"></div>
         <div class="flex justify-end gap-3 pt-2">
@@ -2659,6 +3096,10 @@ document.addEventListener('click', async (e) => {
       state.announcementCategoryFilter = el.dataset.value;
       render();
       break;
+    case 'toggle-pdf-preview':
+      state.expandedAnnouncementPdf = state.expandedAnnouncementPdf === el.dataset.id ? null : el.dataset.id;
+      render();
+      break;
     case 'open-periodic-check-form':
       state.modal = { type: 'periodic-check', data: null };
       render();
@@ -2693,6 +3134,15 @@ document.addEventListener('click', async (e) => {
       if (confirm('Bu devamsızlık/izin kaydını silmek istediğinize emin misiniz?')) {
         await db.collection('absences').doc(el.dataset.id).delete();
         await loadAllAbsences(); render();
+      }
+      break;
+    }
+    case 'import-trainings': await handleTrainingImport(); break;
+    case 'reconcile-trainings': await reconcileTrainingEmployeeIds(); break;
+    case 'delete-training': {
+      if (confirm('Bu eğitim kaydını silmek istediğinize emin misiniz?')) {
+        await db.collection('trainings').doc(el.dataset.id).delete();
+        await loadAllTrainings(); render();
       }
       break;
     }
@@ -3052,12 +3502,21 @@ document.addEventListener('click', (e) => {
     const input = document.getElementById('shift-file-input');
     if (input) input.click();
   }
+  if (e.target.closest('#training-dropzone')) {
+    const input = document.getElementById('training-file-input');
+    if (input) input.click();
+  }
 });
 document.addEventListener('input', (e) => {
   if (e.target.id === 'absence-search') {
     state.adminAbsenceSearch = e.target.value;
     render();
     document.getElementById('absence-search')?.focus();
+  }
+  if (e.target.id === 'training-search') {
+    state.adminTrainingSearch = e.target.value;
+    render();
+    document.getElementById('training-search')?.focus();
   }
 });
 document.addEventListener('change', (e) => {
@@ -3068,6 +3527,10 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'absence-file-input') {
     const file = e.target.files?.[0];
     if (file) parseAbsenceFile(file);
+  }
+  if (e.target.id === 'training-file-input') {
+    const file = e.target.files?.[0];
+    if (file) parseTrainingFile(file);
   }
   if (e.target.id === 'update-file-input') {
     const file = e.target.files?.[0];
@@ -3087,7 +3550,7 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'announcement-attachment-input') {
     const file = e.target.files?.[0];
     if (file) {
-      fileToBase64(file).then(b64 => {
+      fileToBase64(file, 700 * 1024).then(b64 => {
         state.announcementAttachmentBase64 = b64;
         state.announcementAttachmentName = file.name;
         render();
@@ -3108,7 +3571,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('dragover', (e) => {
-  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone') || e.target.closest('#update-dropzone') || e.target.closest('#shift-dropzone')) e.preventDefault();
+  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone') || e.target.closest('#update-dropzone') || e.target.closest('#shift-dropzone') || e.target.closest('#training-dropzone')) e.preventDefault();
 });
 document.addEventListener('drop', (e) => {
   const dz = e.target.closest('#dropzone');
@@ -3134,6 +3597,12 @@ document.addEventListener('drop', (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (file) handleShiftFileUpload(file);
+  }
+  const tdz = e.target.closest('#training-dropzone');
+  if (tdz) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) parseTrainingFile(file);
   }
 });
 
