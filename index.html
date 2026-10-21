@@ -2053,7 +2053,7 @@ function parseTrainingRowsFromSheet(sheet) {
   let headerRowIdx = -1, headers = [];
   for (let i = 0; i < Math.min(aoa.length, 30); i++) {
     const normRow = (aoa[i] || []).map(c => normalizeKey(c || ''));
-    if (normRow.includes('sicil') && normRow.some(c => c.includes('egitim'))) {
+    if (normRow.some(c => c.includes('sicil')) && normRow.some(c => c.includes('egitim'))) {
       headerRowIdx = i; headers = aoa[i]; break;
     }
   }
