@@ -671,7 +671,7 @@ async function render() {
   if (route === '#/dashboard') {
     title = `Merhaba, ${escapeHtml(state.profile.first_name)} 👋`;
     subtitle = `${escapeHtml(state.profile.department)} · Sicil No: ${escapeHtml(state.profile.registry_number || '—')}`;
-    await Promise.all([loadAnnouncements(), loadMyPeriodicChecks(state.profile.id), loadMyAbsences(state.profile.id)]);
+    await Promise.all([loadAnnouncements(), loadMyPeriodicChecks(state.profile.id), loadMyAbsences(state.profile.id), loadMyTrainings(state.profile.id)]);
     content = employeeDashboardView();
   } else if (route === '#/admin') {
     title = 'Genel Bakış';
@@ -973,8 +973,14 @@ function employeeDashboardView() {
     .filter(a => normalizeKey(a.leave_type).includes('yillik'))
     .reduce((sum, a) => sum + (Number(a.days) || 0), 0);
   const anns = state.announcements.slice(0, 10);
+  const overdueTrainingsCount = state.myTrainings.filter(t => normalizeKey(t.due_status).includes('gecen')).length;
 
   return `
+  ${overdueTrainingsCount > 0 ? `
+  <a href="https://www.bshisgegitim.com/login" target="_blank" rel="noopener" class="mb-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600 hover:bg-brick-500/15 transition-colors">
+    <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+    Süresi geçmiş ${overdueTrainingsCount} eğitiminiz var, lütfen tamamlayın.
+  </a>` : ''}
   <div class="grid gap-5 lg:grid-cols-3">
     <div class="lg:col-span-1 space-y-5">
       <div class="card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
@@ -1240,10 +1246,10 @@ function employeeTrainingsView() {
   const overdueCount = items.filter(t => normalizeKey(t.due_status).includes('gecen')).length;
   return `
   ${overdueCount > 0 ? `
-  <div class="mb-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600">
+  <a href="https://www.bshisgegitim.com/login" target="_blank" rel="noopener" class="mb-5 flex items-center gap-2 rounded-lg bg-brick-500/10 px-3.5 py-2.5 text-sm font-medium text-brick-600 hover:bg-brick-500/15 transition-colors">
     <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
     Süresi geçmiş ${overdueCount} eğitiminiz var, lütfen tamamlayın.
-  </div>` : ''}
+  </a>` : ''}
   <div class="space-y-3">
     ${items.map(t => `
     <article class="card p-5 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
