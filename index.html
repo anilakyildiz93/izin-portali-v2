@@ -495,7 +495,7 @@ function fileToBase64(file, maxBytes = 500 * 1024) {
   });
 }
 
-const REPORT_TYPE_LABELS = { oneri: 'Öneri', ramak_kala: 'Ramak Kala' };
+const REPORT_TYPE_LABELS = { oneri: 'Öneri', ramak_kala: 'Ramak Kala', proje: 'Proje' };
 const RISK_LABELS = { dusuk: 'Düşük', orta: 'Orta', yuksek: 'Yüksek' };
 const RISK_COLORS = {
   dusuk: 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300',
@@ -945,8 +945,8 @@ async function render() {
     await loadEmployees();
     content = adminUpdateEmployeesView();
   } else if (route === '#/report') {
-    title = 'Öneri / Ramak Kala Bildir';
-    subtitle = 'Bir öneriniz veya ramak kala olayınız mı var?';
+    title = 'Öneri / Ramak Kala / Proje Bildir';
+    subtitle = 'Bir öneriniz, ramak kala olayınız veya proje fikriniz mi var?';
     await loadMyReports(state.profile.id);
     content = employeeReportView();
   } else if (route === '#/shifts') {
@@ -1028,7 +1028,7 @@ function shell(title, subtitle, content, role, route) {
     { href: '#/announcements', label: 'Duyurular', icon: 'megaphone' },
     { href: '#/trainings', label: 'Eğitimlerim', icon: 'graduation-cap' },
     { href: '#/periodic-checks', label: 'Periyodik Kontrollerim', icon: 'stethoscope' },
-    { href: '#/report', label: 'Öneri / Ramak Kala', icon: 'alert-triangle' }
+    { href: '#/report', label: 'Öneri / Ramak Kala / Proje', icon: 'alert-triangle' }
   ];
   const adminLinks = [
     { href: '#/admin', label: 'Genel Bakış', icon: 'layout-dashboard' },
@@ -1588,7 +1588,7 @@ function employeeReportView() {
   <div class="grid gap-5 lg:grid-cols-3">
     <div class="card p-6 lg:col-span-2 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
       <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Yeni Bildirim</h2>
-      <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">Bir öneriniz veya fark ettiğiniz bir ramak kala (near-miss) olayı varsa bildirin.</p>
+      <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">Bir öneriniz, fark ettiğiniz bir ramak kala (near-miss) olayı veya bir proje fikriniz varsa bildirin.</p>
 
       <form id="report-form" class="mt-5 space-y-4">
         <div>
@@ -1596,6 +1596,7 @@ function employeeReportView() {
           <select name="type" required class="input">
             <option value="oneri">Öneri</option>
             <option value="ramak_kala">Ramak Kala</option>
+            <option value="proje">Proje</option>
           </select>
         </div>
 
@@ -1658,7 +1659,7 @@ function employeeReportView() {
       <h3 class="mt-3 font-display text-sm font-semibold text-ink-900 dark:text-sand-50">Neden önemli?</h3>
       <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
         Ramak kala bildirimleri, henüz bir kazaya dönüşmemiş riskli durumları erken tespit etmemizi sağlar.
-        Önerileriniz de çalışma ortamını iyileştirmemize yardımcı olur. Bildiriminiz sadece yöneticiler tarafından görüntülenir.
+        Önerileriniz de çalışma ortamını iyileştirmemize yardımcı olur. Proje fikirleriniz ise verimliliği artıracak, zaman veya maliyet kazandıracak iyileştirmelerin hayata geçmesini sağlayabilir. Bildiriminiz sadece yöneticiler tarafından görüntülenir.
       </p>
     </div>
   </div>
@@ -1750,6 +1751,7 @@ function adminReportsView() {
     ${filterBtn('hepsi', 'Hepsi')}
     ${filterBtn('oneri', 'Öneriler')}
     ${filterBtn('ramak_kala', 'Ramak Kala')}
+    ${filterBtn('proje', 'Proje')}
   </div>
   ${filtered.length === 0
     ? `<div class="card p-10 text-center text-sm text-ink-800/50 dark:text-sand-100/45 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">Bu filtrede bildirim yok.</div>`
