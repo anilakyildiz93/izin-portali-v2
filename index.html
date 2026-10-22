@@ -232,13 +232,15 @@ async function loadAllReports() {
 function normalizePeriodicCheck(id, d) {
   return {
     id,
+    registry_number: d.registryNumber || '',
     employee_id: d.employeeId,
     employee_name: d.employeeName,
     department: d.department,
     check_type: d.checkType,
     due_date: d.dueDate,
     status: d.status || 'yaklasiyor',
-    created_at: d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toISOString() : d.createdAt
+    created_at: d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toISOString() : d.createdAt,
+    updated_at: d.updatedAt && d.updatedAt.toDate ? d.updatedAt.toDate().toISOString() : d.updatedAt
   };
 }
 async function loadAllPeriodicChecks() {
@@ -412,6 +414,11 @@ const state = {
   trainingImporting: false,
   trainingBulkResults: null,
   adminTrainingSearch: '',
+  periodicCheckBulkRows: [],
+  periodicCheckBulkFileName: '',
+  periodicCheckBulkSheets: [],
+  periodicCheckImporting: false,
+  periodicCheckBulkResults: null,
   updateBulkRows: [],
   updateBulkFileName: '',
   updateImporting: false,
@@ -512,7 +519,8 @@ const CHECK_TYPE_LABELS = {
   saglik: 'Periyodik Sağlık Kontrolü',
   revir: 'Revir Kontrolü',
   hastane: 'Hastane Kontrolü',
-  egitim: 'Eğitim'
+  egitim: 'Eğitim',
+  yukseklik: 'Yüksekte Çalışma Muayenesi'
 };
 const PERIODIC_STATUS_LABELS = {
   tamamlandi: 'Tamamlandı',
@@ -551,6 +559,247 @@ function fmtDaysDiff(dateStr) {
   if (d > 0) return `${d} gün kaldı`;
   if (d < 0) return `${Math.abs(d)} gün gecikti`;
   return 'Bugün';
+}
+
+/* =====================================================================
+   ADMIN — PERİYODİK KONTROLLER İÇE AKTARMA (Sağlık Gözetimi Excel'i)
+   Bu dosyalarda her sayfa (Periyodik Muayene, Yüksekte Çalışma Muayenesi
+   vb.) ayrı bir kontrol türünü temsil eder; sayfa başlıkları da dosyadan
+   dosyaya değişebildiği için ("Muayene süreci bu tarihten önce..." / "En
+   Geç Muayene Tarihi") sütunlar sabit isim yerine anahtar kelimeyle (Sicil,
+   Ad Soyad, Tarih, Geldi, Kısım) bulunuyor.
+   ===================================================================== */
+// Sayfa adından kontrol türü anahtarını çıkarır; bilinen bir anahtar
+// kelimeyle eşleşmezse sayfanın kendi adını tür olarak kullanır (ekranda
+// olduğu gibi gösterilir).
+function periodicCheckTypeFromSheetName(name) {
+  const n = normalizeKey(name);
+  if (n.includes('yuksek')) return 'yukseklik';
+  if (n.includes('revir')) return 'revir';
+  if (n.includes('hastane')) return 'hastane';
+  if (n.includes('periyodik') || n.includes('muayene') || n.includes('saglik')) return 'saglik';
+  return name;
+}
+// "24.07.2026" veya "24/07/2026" gibi tarihleri, zaten "2026-07-24" ise
+// olduğu gibi bırakarak, karşılaştırılabilir yyyy-mm-dd biçimine çevirir.
+function normalizePeriodicDate(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
+  if (m) {
+    const [, d, mo, y] = m;
+    return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  return s;
+}
+function periodicStatusFromDueGeldi(dueDate, geldi) {
+  if (geldi) return 'tamamlandi';
+  const diff = daysFromToday(dueDate);
+  if (diff !== null && !isNaN(diff) && diff < 0) return 'gecikti';
+  return 'yaklasiyor';
+}
+// Başlık satırındaki hücreleri, içerdikleri anahtar kelimeye göre
+// (Sicil / Ad Soyad / Kısım / Geldi / …tarih…) sütun rollerine eşler.
+function detectPeriodicColumns(headers) {
+  const roles = {};
+  (headers || []).forEach((h, idx) => {
+    const n = normalizeKey(h || '');
+    if (!n) return;
+    if (roles.registry_number === undefined && n.includes('sicil')) { roles.registry_number = idx; return; }
+    if (roles.employee_name === undefined && (n.includes('adi soyadi') || n.includes('ad soyad') || n.includes('calisan adi') || n.includes('isim'))) { roles.employee_name = idx; return; }
+    if (n.includes('kisim')) { roles.department = idx; return; }
+    if (roles.department === undefined && n.includes('calisma yeri')) { roles.department = idx; return; }
+    if (roles.geldi === undefined && n.includes('geldi')) { roles.geldi = idx; return; }
+    if (roles.due_date === undefined && n.includes('tarih') && !n.includes('hekim')) { roles.due_date = idx; return; }
+  });
+  return roles;
+}
+function parsePeriodicCheckRowsFromSheet(sheet, sheetName) {
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' });
+  let headerRowIdx = -1, headers = [];
+  for (let i = 0; i < Math.min(aoa.length, 10); i++) {
+    const normRow = (aoa[i] || []).map(c => normalizeKey(c || ''));
+    if (normRow.some(c => c.includes('sicil'))) { headerRowIdx = i; headers = aoa[i]; break; }
+  }
+  if (headerRowIdx === -1) return [];
+  const roles = detectPeriodicColumns(headers);
+  if (roles.registry_number === undefined) return [];
+  const checkType = periodicCheckTypeFromSheetName(sheetName);
+  const rows = [];
+  for (let i = headerRowIdx + 1; i < aoa.length; i++) {
+    const raw = aoa[i];
+    if (!raw || raw.every(c => c === '' || c === undefined || c === null)) continue;
+    const registry_number = String(raw[roles.registry_number] ?? '').trim();
+    if (!registry_number) continue;
+    const employee_name = roles.employee_name !== undefined ? String(raw[roles.employee_name] ?? '').trim() : '';
+    const department = roles.department !== undefined ? String(raw[roles.department] ?? '').trim() : '';
+    const due_date = normalizePeriodicDate(roles.due_date !== undefined ? raw[roles.due_date] : '');
+    const geldi = roles.geldi !== undefined ? String(raw[roles.geldi] ?? '').trim() : '';
+    rows.push({ registry_number, employee_name, department, check_type: checkType, due_date, status: periodicStatusFromDueGeldi(due_date, geldi) });
+  }
+  return rows;
+}
+function mapPeriodicCsvRow(rawRow, checkType) {
+  const normalized = {};
+  for (const [k, v] of Object.entries(rawRow)) normalized[normalizeKey(k)] = v;
+  let registryKey, nameKey, deptKey, dateKey, geldiKey;
+  for (const k of Object.keys(normalized)) {
+    if (!registryKey && k.includes('sicil')) { registryKey = k; continue; }
+    if (!nameKey && (k.includes('adi soyadi') || k.includes('ad soyad') || k.includes('calisan adi') || k.includes('isim'))) { nameKey = k; continue; }
+    if (k.includes('kisim')) { deptKey = k; continue; }
+    if (!deptKey && k.includes('calisma yeri')) { deptKey = k; continue; }
+    if (!geldiKey && k.includes('geldi')) { geldiKey = k; continue; }
+    if (!dateKey && k.includes('tarih') && !k.includes('hekim')) { dateKey = k; continue; }
+  }
+  if (!registryKey) return null;
+  const registry_number = String(normalized[registryKey] ?? '').trim();
+  if (!registry_number) return null;
+  const employee_name = nameKey ? String(normalized[nameKey] ?? '').trim() : '';
+  const department = deptKey ? String(normalized[deptKey] ?? '').trim() : '';
+  const due_date = normalizePeriodicDate(dateKey ? normalized[dateKey] : '');
+  const geldi = geldiKey ? String(normalized[geldiKey] ?? '').trim() : '';
+  return { registry_number, employee_name, department, check_type: checkType, due_date, status: periodicStatusFromDueGeldi(due_date, geldi) };
+}
+function parsePeriodicCheckFile(file) {
+  state.periodicCheckBulkFileName = file.name;
+  state.periodicCheckBulkResults = null;
+  state.periodicCheckBulkRows = [];
+  state.periodicCheckBulkSheets = [];
+  const isCsv = file.name.toLowerCase().endsWith('.csv');
+  if (isCsv) {
+    const checkType = periodicCheckTypeFromSheetName(file.name.replace(/\.csv$/i, ''));
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: (res) => {
+        const rows = res.data.map(r => mapPeriodicCsvRow(r, checkType)).filter(Boolean);
+        state.periodicCheckBulkRows = rows;
+        state.periodicCheckBulkSheets = rows.length ? [file.name] : [];
+        if (rows.length === 0) {
+          state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: 'Dosyada Sicil sütununu içeren bir başlık satırı bulunamadı.' };
+        }
+        render();
+      },
+      error: (err) => {
+        state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: err.message };
+        render();
+      }
+    });
+  } else {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunamadı. Lütfen tekrar deneyin.' };
+      render();
+    };
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        let allRows = [];
+        const usedSheets = [];
+        wb.SheetNames.forEach(name => {
+          const rows = parsePeriodicCheckRowsFromSheet(wb.Sheets[name], name);
+          if (rows.length > 0) { allRows = allRows.concat(rows); usedSheets.push(name); }
+        });
+        state.periodicCheckBulkRows = allRows;
+        state.periodicCheckBulkSheets = usedSheets;
+        if (allRows.length === 0) {
+          state.periodicCheckBulkResults = {
+            addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0,
+            error: 'Dosyadaki hiçbir sayfada Sicil No sütununu içeren bir başlık satırı bulunamadı.'
+          };
+        }
+      } catch (err) {
+        state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunurken hata oluştu: ' + err.message };
+      }
+      render();
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+// Aynı çalışan + aynı kontrol türü + aynı termin tarihi tekrar yüklendiğinde
+// AYNI belge kimliğini üretir; böylece dosya her gün yeniden yüklenebilir —
+// durum/termin bilgisi güncellenir, kopya kayıt oluşmaz.
+function periodicCheckDocId(r) {
+  const slug = s => normalizeKey(s || '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const id = `${slug(r.registry_number)}_${slug(r.check_type)}_${slug(r.due_date)}`;
+  return id.slice(0, 400) || null;
+}
+async function handlePeriodicCheckImport() {
+  state.periodicCheckImporting = true; render();
+  try {
+    if (state.periodicChecks.length === 0) await loadAllPeriodicChecks();
+    const existingIds = new Set(state.periodicChecks.map(c => c.id));
+
+    const rows = state.periodicCheckBulkRows;
+    let addedCount = 0, updatedCount = 0, invalidCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = db.batch();
+      let batchHasWrites = false;
+      rows.slice(i, i + CHUNK).forEach(r => {
+        const docId = periodicCheckDocId(r);
+        if (!docId) { invalidCount++; return; }
+        const isNew = !existingIds.has(docId);
+        existingIds.add(docId);
+        const match = findEmployeeByRegistry(r.registry_number);
+        const ref = db.collection('periodicChecks').doc(docId);
+        batch.set(ref, {
+          registryNumber: r.registry_number,
+          employeeId: match ? match.id : null,
+          employeeName: r.employee_name || (match ? `${match.first_name} ${match.last_name}` : ''),
+          department: r.department || (match ? match.department : ''),
+          checkType: r.check_type,
+          dueDate: r.due_date || '',
+          status: r.status || 'yaklasiyor',
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          ...(isNew ? { createdAt: firebase.firestore.FieldValue.serverTimestamp() } : {})
+        }, { merge: true });
+        batchHasWrites = true;
+        if (isNew) addedCount++; else updatedCount++;
+      });
+      if (batchHasWrites) await batch.commit();
+    }
+    state.periodicCheckBulkResults = { addedCount, updatedCount, invalidCount, total: rows.length };
+    state.periodicCheckBulkRows = [];
+    state.periodicCheckBulkFileName = '';
+    state.periodicCheckBulkSheets = [];
+    await loadAllPeriodicChecks();
+  } catch (err) {
+    state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: state.periodicCheckBulkRows.length, error: err.message };
+  } finally {
+    state.periodicCheckImporting = false; render();
+  }
+}
+async function reconcilePeriodicCheckEmployeeIds() {
+  state.periodicCheckImporting = true; render();
+  try {
+    const unmatched = state.periodicChecks.filter(c => !c.employee_id && c.registry_number);
+    let fixedCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < unmatched.length; i += CHUNK) {
+      const batch = db.batch();
+      let hasWrites = false;
+      unmatched.slice(i, i + CHUNK).forEach(c => {
+        const match = findEmployeeByRegistry(c.registry_number);
+        if (match) {
+          batch.update(db.collection('periodicChecks').doc(c.id), {
+            employeeId: match.id,
+            employeeName: c.employee_name || `${match.first_name} ${match.last_name}`
+          });
+          hasWrites = true;
+          fixedCount++;
+        }
+      });
+      if (hasWrites) await batch.commit();
+    }
+    state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, reconciled: fixedCount, unmatchedTotal: unmatched.length };
+    await loadAllPeriodicChecks();
+  } catch (err) {
+    state.periodicCheckBulkResults = { addedCount: 0, updatedCount: 0, invalidCount: 0, total: 0, error: err.message };
+  } finally {
+    state.periodicCheckImporting = false; render();
+  }
 }
 
 function icons() { if (window.lucide) lucide.createIcons(); }
@@ -1495,6 +1744,71 @@ function adminPeriodicChecksView() {
     ${summaryCard('heart', 'Revire Gitmesi Gereken', counts.revire_gitmeli)}
     ${summaryCard('shield', 'Hastaneye Gitmesi Gereken', counts.hastaneye_gitmeli)}
     ${summaryCard('clock', 'Takip Gereken', counts.takip_gereken)}
+  </div>
+
+  <div class="card p-6 mb-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+    <div id="periodic-check-dropzone" class="flex cursor-pointer flex-col items-center justify-center rounded-xl2 border-2 border-dashed border-pine-300 dark:border-pine-700 bg-pine-50/40 dark:bg-pine-900/10 px-6 py-10 text-center transition hover:bg-pine-50 dark:hover:bg-pine-900/20">
+      <i data-lucide="upload-cloud" class="w-7 h-7 text-pine-600 dark:text-pine-400"></i>
+      <p class="mt-2 text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(state.periodicCheckBulkFileName) || 'Sağlık gözetimi / periyodik kontrol Excel dosyasını sürükleyip bırakın veya tıklayın'}</p>
+      <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">.xlsx, .xls veya .csv desteklenir — dosyadaki her sayfa (Periyodik Muayene, Yüksekte Çalışma Muayenesi vb.) ayrı kontrol türü olarak okunur</p>
+      <input id="periodic-check-file-input" type="file" accept=".csv,.xlsx,.xls" class="hidden" />
+    </div>
+
+    ${state.periodicCheckBulkRows.length > 0 ? `
+    <div class="mt-6">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm font-medium text-ink-900 dark:text-sand-50">
+          ${state.periodicCheckBulkRows.length} satır bulundu ${state.periodicCheckBulkSheets.length ? `(sayfalar: ${state.periodicCheckBulkSheets.map(s => `"${escapeHtml(s)}"`).join(', ')})` : ''}
+        </p>
+        <button data-action="import-periodic-checks" ${state.periodicCheckImporting ? 'disabled' : ''} class="btn-primary inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium bg-pine-600 text-white hover:bg-pine-700 disabled:opacity-50">
+          ${state.periodicCheckImporting ? 'Aktarılıyor…' : 'İçeri Aktar'}
+        </button>
+      </div>
+      <div class="mt-3 overflow-auto rounded-lg border border-black/5 dark:border-white/5">
+        <table class="w-full min-w-[700px] text-left text-xs">
+          <thead class="bg-sand-50 dark:bg-ink-900"><tr class="text-ink-800/50 dark:text-sand-100/45">
+            <th class="px-2 py-2 font-medium">Sicil</th>
+            <th class="px-2 py-2 font-medium">Ad</th>
+            <th class="px-2 py-2 font-medium">Tür</th>
+            <th class="px-2 py-2 font-medium">Tarih</th>
+            <th class="px-2 py-2 font-medium">Durum</th>
+          </tr></thead>
+          <tbody class="divide-y divide-black/5 dark:divide-white/5">
+            ${state.periodicCheckBulkRows.slice(0, 20).map(r => `<tr>
+              <td class="px-2 py-1.5">${escapeHtml(r.registry_number || '')}</td>
+              <td class="px-2 py-1.5">${escapeHtml(r.employee_name || '')}</td>
+              <td class="px-2 py-1.5">${escapeHtml(CHECK_TYPE_LABELS[r.check_type] || r.check_type)}</td>
+              <td class="px-2 py-1.5">${escapeHtml(r.due_date || '')}</td>
+              <td class="px-2 py-1.5">${escapeHtml(PERIODIC_STATUS_LABELS[r.status] || r.status)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        ${state.periodicCheckBulkRows.length > 20 ? `<p class="px-2 py-2 text-xs text-ink-800/45 dark:text-sand-100/40">…ve ${state.periodicCheckBulkRows.length - 20} satır daha</p>` : ''}
+      </div>
+    </div>` : ''}
+
+    ${state.periodicCheckBulkResults ? `
+      <div class="mt-5 rounded-lg ${state.periodicCheckBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.periodicCheckBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
+        ${state.periodicCheckBulkResults.error
+          ? `Hata: ${escapeHtml(state.periodicCheckBulkResults.error)}`
+          : state.periodicCheckBulkResults.reconciled !== undefined && state.periodicCheckBulkResults.total === 0
+          ? `${state.periodicCheckBulkResults.reconciled} kayıt çalışana bağlandı${state.periodicCheckBulkResults.unmatchedTotal - state.periodicCheckBulkResults.reconciled > 0 ? ` (${state.periodicCheckBulkResults.unmatchedTotal - state.periodicCheckBulkResults.reconciled} kayıt için sistemde bu sicil numarasıyla eşleşen bir çalışan bulunamadı).` : '.'}`
+          : `${state.periodicCheckBulkResults.addedCount} yeni kayıt eklendi` +
+            (state.periodicCheckBulkResults.updatedCount ? `, ${state.periodicCheckBulkResults.updatedCount} kayıt güncellendi` : '') +
+            (state.periodicCheckBulkResults.invalidCount ? `, ${state.periodicCheckBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
+      </div>` : ''}
+
+    ${state.periodicChecks.some(c => !c.employee_id && c.registry_number) ? `
+      <div class="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gold-500/10 px-3.5 py-2.5 text-sm text-gold-700 dark:text-gold-400">
+        <span>${state.periodicChecks.filter(c => !c.employee_id && c.registry_number).length} kayıt henüz bir çalışan hesabına bağlanmamış — bu yüzden çalışan panelinde görünmüyor olabilirler.</span>
+        <button data-action="reconcile-periodic-checks" ${state.periodicCheckImporting ? 'disabled' : ''} class="shrink-0 rounded-lg border border-gold-500/40 px-3 py-1.5 text-xs font-medium text-gold-700 dark:text-gold-400 hover:bg-gold-500/10 disabled:opacity-50">
+          ${state.periodicCheckImporting ? 'Onarılıyor…' : 'Eşleştirmeleri Onar'}
+        </button>
+      </div>` : ''}
+
+    <p class="mt-5 text-xs leading-relaxed text-ink-800/55 dark:text-sand-100/45">
+      Sicil numarası sistemdeki bir çalışanla eşleşirse kayıt o çalışanın panelinde de görünür. Aynı dosyayı tekrar yüklemek güvenlidir — aynı çalışan + aynı kontrol türü + aynı tarih eşleşirse kayıt güncellenir, kopya oluşmaz.
+    </p>
   </div>
 
   <div class="mb-5 flex justify-end">
@@ -3155,6 +3469,8 @@ document.addEventListener('click', async (e) => {
     }
     case 'import-trainings': await handleTrainingImport(); break;
     case 'reconcile-trainings': await reconcileTrainingEmployeeIds(); break;
+    case 'import-periodic-checks': await handlePeriodicCheckImport(); break;
+    case 'reconcile-periodic-checks': await reconcilePeriodicCheckEmployeeIds(); break;
     case 'delete-training': {
       if (confirm('Bu eğitim kaydını silmek istediğinize emin misiniz?')) {
         await db.collection('trainings').doc(el.dataset.id).delete();
@@ -3522,6 +3838,10 @@ document.addEventListener('click', (e) => {
     const input = document.getElementById('training-file-input');
     if (input) input.click();
   }
+  if (e.target.closest('#periodic-check-dropzone')) {
+    const input = document.getElementById('periodic-check-file-input');
+    if (input) input.click();
+  }
 });
 document.addEventListener('input', (e) => {
   if (e.target.id === 'absence-search') {
@@ -3547,6 +3867,10 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'training-file-input') {
     const file = e.target.files?.[0];
     if (file) parseTrainingFile(file);
+  }
+  if (e.target.id === 'periodic-check-file-input') {
+    const file = e.target.files?.[0];
+    if (file) parsePeriodicCheckFile(file);
   }
   if (e.target.id === 'update-file-input') {
     const file = e.target.files?.[0];
@@ -3587,7 +3911,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('dragover', (e) => {
-  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone') || e.target.closest('#update-dropzone') || e.target.closest('#shift-dropzone') || e.target.closest('#training-dropzone')) e.preventDefault();
+  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone') || e.target.closest('#update-dropzone') || e.target.closest('#shift-dropzone') || e.target.closest('#training-dropzone') || e.target.closest('#periodic-check-dropzone')) e.preventDefault();
 });
 document.addEventListener('drop', (e) => {
   const dz = e.target.closest('#dropzone');
@@ -3619,6 +3943,12 @@ document.addEventListener('drop', (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (file) parseTrainingFile(file);
+  }
+  const pdz = e.target.closest('#periodic-check-dropzone');
+  if (pdz) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) parsePeriodicCheckFile(file);
   }
 });
 
