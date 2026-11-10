@@ -730,11 +730,12 @@ function periodicCheckDocId(r) {
 async function handlePeriodicCheckImport() {
   state.periodicCheckImporting = true; render();
   try {
-    if (state.periodicChecks.length === 0) await loadAllPeriodicChecks();
+    await loadAllPeriodicChecks();
     const existingIds = new Set(state.periodicChecks.map(c => c.id));
+    const newIds = new Set();
 
     const rows = state.periodicCheckBulkRows;
-    let addedCount = 0, updatedCount = 0, invalidCount = 0;
+    let addedCount = 0, updatedCount = 0, invalidCount = 0, removedCount = 0;
     const CHUNK = 400;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const batch = db.batch();
@@ -744,6 +745,7 @@ async function handlePeriodicCheckImport() {
         if (!docId) { invalidCount++; return; }
         const isNew = !existingIds.has(docId);
         existingIds.add(docId);
+        newIds.add(docId);
         const match = findEmployeeByRegistry(r.registry_number);
         const ref = db.collection('periodicChecks').doc(docId);
         batch.set(ref, {
@@ -762,7 +764,19 @@ async function handlePeriodicCheckImport() {
       });
       if (batchHasWrites) await batch.commit();
     }
-    state.periodicCheckBulkResults = { addedCount, updatedCount, invalidCount, total: rows.length };
+    // Yüklenen dosyadaki kontrol türü/türleri için, yeni Excel'de olmayan eski
+    // kayıtları sil. Diğer türlere (örn. diğer Excel'den yüklenenlere) dokunulmaz.
+    if (newIds.size > 0) {
+      const uploadedTypes = new Set(rows.map(r => r.check_type));
+      const stale = state.periodicChecks.filter(c => uploadedTypes.has(c.check_type) && !newIds.has(c.id));
+      for (let i = 0; i < stale.length; i += CHUNK) {
+        const batch = db.batch();
+        stale.slice(i, i + CHUNK).forEach(c => batch.delete(db.collection('periodicChecks').doc(c.id)));
+        await batch.commit();
+        removedCount += Math.min(CHUNK, stale.length - i);
+      }
+    }
+    state.periodicCheckBulkResults = { addedCount, updatedCount, invalidCount, removedCount, total: rows.length };
     state.periodicCheckBulkRows = [];
     state.periodicCheckBulkFileName = '';
     state.periodicCheckBulkSheets = [];
@@ -1850,6 +1864,7 @@ function adminPeriodicChecksView() {
           ? `${state.periodicCheckBulkResults.reconciled} kayıt çalışana bağlandı${state.periodicCheckBulkResults.unmatchedTotal - state.periodicCheckBulkResults.reconciled > 0 ? ` (${state.periodicCheckBulkResults.unmatchedTotal - state.periodicCheckBulkResults.reconciled} kayıt için sistemde bu sicil numarasıyla eşleşen bir çalışan bulunamadı).` : '.'}`
           : `${state.periodicCheckBulkResults.addedCount} yeni kayıt eklendi` +
             (state.periodicCheckBulkResults.updatedCount ? `, ${state.periodicCheckBulkResults.updatedCount} kayıt güncellendi` : '') +
+            (state.periodicCheckBulkResults.removedCount ? `, ${state.periodicCheckBulkResults.removedCount} eski kayıt silindi` : '') +
             (state.periodicCheckBulkResults.invalidCount ? `, ${state.periodicCheckBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
       </div>` : ''}
 
@@ -1862,7 +1877,7 @@ function adminPeriodicChecksView() {
       </div>` : ''}
 
     <p class="mt-5 text-xs leading-relaxed text-ink-800/55 dark:text-sand-100/45">
-      Sicil numarası sistemdeki bir çalışanla eşleşirse kayıt o çalışanın panelinde de görünür. Aynı dosyayı tekrar yüklemek güvenlidir — aynı çalışan + aynı kontrol türü + aynı tarih eşleşirse kayıt güncellenir, kopya oluşmaz.
+      Sicil numarası sistemdeki bir çalışanla eşleşirse kayıt o çalışanın panelinde de görünür. Yüklediğiniz Excel esas alınır: seçilen kontrol türüne ait, yeni dosyada bulunmayan eski kayıtlar otomatik silinir. Diğer kontrol türlerinin kayıtlarına dokunulmaz. Aynı dosyayı tekrar yüklemek güvenlidir, kopya oluşmaz.
     </p>
   </div>
 
@@ -2515,11 +2530,12 @@ function trainingDocId(r) {
 async function handleTrainingImport() {
   state.trainingImporting = true; render();
   try {
-    if (state.trainings.length === 0) await loadAllTrainings();
+    await loadAllTrainings();
     const existingIds = new Set(state.trainings.map(t => t.id));
+    const newIds = new Set();
 
     const rows = state.trainingBulkRows;
-    let addedCount = 0, updatedCount = 0, invalidCount = 0;
+    let addedCount = 0, updatedCount = 0, invalidCount = 0, removedCount = 0;
     const CHUNK = 400;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const batch = db.batch();
@@ -2529,6 +2545,7 @@ async function handleTrainingImport() {
         if (!docId) { invalidCount++; return; }
         const isNew = !existingIds.has(docId);
         existingIds.add(docId);
+        newIds.add(docId);
         const match = findEmployeeByRegistry(r.registry_number);
         const ref = db.collection('trainings').doc(docId);
         batch.set(ref, {
@@ -2548,7 +2565,18 @@ async function handleTrainingImport() {
       });
       if (batchHasWrites) await batch.commit();
     }
-    state.trainingBulkResults = { addedCount, updatedCount, invalidCount, total: rows.length };
+    // Yeni Excel'de olmayan eski eğitim kayıtlarını sil (Excel = tek doğru kaynak).
+    // Yeni dosyadan hiç geçerli satır çıkmadıysa güvenlik için hiçbir şey silinmez.
+    if (newIds.size > 0) {
+      const stale = state.trainings.filter(t => !newIds.has(t.id));
+      for (let i = 0; i < stale.length; i += CHUNK) {
+        const batch = db.batch();
+        stale.slice(i, i + CHUNK).forEach(t => batch.delete(db.collection('trainings').doc(t.id)));
+        await batch.commit();
+        removedCount += Math.min(CHUNK, stale.length - i);
+      }
+    }
+    state.trainingBulkResults = { addedCount, updatedCount, invalidCount, removedCount, total: rows.length };
     state.trainingBulkRows = [];
     state.trainingBulkFileName = '';
     await loadAllTrainings();
@@ -2840,6 +2868,7 @@ function adminTrainingsView() {
             ? `${state.trainingBulkResults.reconciled} kayıt çalışana bağlandı${state.trainingBulkResults.unmatchedTotal - state.trainingBulkResults.reconciled > 0 ? ` (${state.trainingBulkResults.unmatchedTotal - state.trainingBulkResults.reconciled} kayıt için sistemde bu sicil numarasıyla eşleşen bir çalışan bulunamadı).` : '.'}`
             : `${state.trainingBulkResults.addedCount} yeni kayıt eklendi` +
               (state.trainingBulkResults.updatedCount ? `, ${state.trainingBulkResults.updatedCount} kayıt güncellendi` : '') +
+              (state.trainingBulkResults.removedCount ? `, ${state.trainingBulkResults.removedCount} eski kayıt silindi` : '') +
               (state.trainingBulkResults.invalidCount ? `, ${state.trainingBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
         </div>` : ''}
 
