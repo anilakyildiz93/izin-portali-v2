@@ -1978,8 +1978,21 @@ function adminDashboardView() {
     </tr>`).join('');
 
   // ---- Kart verileri ----
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const todayStr = localIso(new Date());
+  const yDate = new Date(); yDate.setDate(yDate.getDate() - 1);
+  const yesterdayStr = localIso(yDate);
   const onLeaveToday = state.absences.filter(a => a.start_date && a.start_date <= todayStr && (a.end_date || a.start_date) >= todayStr);
+  // Dün izinli/istirahatli olanlar: sadece panelde kayıtlı çalışanlar, kişi bazında (aynı kişi tek sayılır)
+  const yEmpMap = {};
+  state.absences.forEach(a => {
+    if (!(a.start_date && a.start_date <= yesterdayStr && (a.end_date || a.start_date) >= yesterdayStr)) return;
+    const emp = (a.employee_id && employees.find(e => e.id === a.employee_id)) || findEmployeeByRegistry(a.registry_number);
+    if (!emp) return;
+    const o = yEmpMap[emp.id] || (yEmpMap[emp.id] = { name: `${emp.first_name} ${emp.last_name}`, dept: emp.department || '', types: [] });
+    if (a.leave_type && !o.types.includes(a.leave_type)) o.types.push(a.leave_type);
+  });
+  const yesterdayList = Object.values(yEmpMap).sort((x, y) => x.name.localeCompare(y.name, 'tr'));
   const sickCount = employees.filter(e => e.on_sick_leave).length;
   const flexNegative = employees.filter(e => (e.flex_time_balance ?? 0) < 0).length;
 
@@ -2121,13 +2134,16 @@ function adminDashboardView() {
           </div>`).join('')}
       </div>`);
 
-  const leaveTodayCard = cardShell('Bugün İzinli / Devamsız', 'calendar-x', '#/admin/absences', onLeaveToday.length === 0
-    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Bugün için kayıtlı izin/devamsızlık yok.</p>`
+  const leaveTodayCard = cardShell(`Dün İstirahatli / İzinli (${yesterdayList.length} kişi)`, 'calendar-x', '#/admin/absences', yesterdayList.length === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Dün için kayıtlı izin/istirahat yok.</p>`
     : `<div class="max-h-60 overflow-auto divide-y divide-black/5 dark:divide-white/5">
-        ${onLeaveToday.slice(0, 30).map(a => `
+        ${yesterdayList.map(o => `
           <div class="flex items-center justify-between gap-2 py-2">
-            <p class="truncate text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(a.employee_name || a.registry_number)}</p>
-            <span class="shrink-0 text-xs text-ink-800/60 dark:text-sand-100/50">${escapeHtml(a.leave_type || '')}</span>
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(o.name)}</p>
+              <p class="truncate text-xs text-ink-800/45 dark:text-sand-100/40">${escapeHtml(o.dept)}</p>
+            </div>
+            <span class="shrink-0 text-xs text-ink-800/60 dark:text-sand-100/50">${escapeHtml(o.types.join(', '))}</span>
           </div>`).join('')}
       </div>`);
 
