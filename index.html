@@ -1983,17 +1983,41 @@ function adminDashboardView() {
   const sickCount = employees.filter(e => e.on_sick_leave).length;
   const flexNegative = employees.filter(e => (e.flex_time_balance ?? 0) < 0).length;
 
-  const trainings = state.trainings;
-  const trTotal = trainings.length;
-  const trDone = trainings.filter(t => normalizeKey(t.completion_status || '').includes('tamamlandi')).length;
-  const trOverdue = trainings.filter(t => normalizeKey(t.due_status || '').includes('gecen')).length;
-  const trOpen = Math.max(trTotal - trDone, 0);
+  // Sadece bu panelde kayıtlı çalışanlar ve KİŞİ bazında sayım:
+  // kayıt, panelde bir çalışanla (employee_id veya sicil no ile) eşleşmiyorsa sayılmaz.
+  const empIds = new Set(employees.map(e => e.id));
+  const personKey = (rec) => {
+    if (rec.employee_id && empIds.has(rec.employee_id)) return rec.employee_id;
+    const m = findEmployeeByRegistry(rec.registry_number);
+    return m ? m.id : null;
+  };
+  const trByPerson = {};
+  state.trainings.forEach(t => {
+    const k = personKey(t); if (!k) return;
+    const o = trByPerson[k] || (trByPerson[k] = { open: false, overdue: false });
+    if (!normalizeKey(t.completion_status || '').includes('tamamlandi')) o.open = true;
+    if (normalizeKey(t.due_status || '').includes('gecen')) o.overdue = true;
+  });
+  const trPeople = Object.values(trByPerson);
+  const trTotal = trPeople.length;
+  const trOverdue = trPeople.filter(o => o.overdue).length;
+  const trOpen = trPeople.filter(o => o.open && !o.overdue).length;
+  const trDone = trPeople.filter(o => !o.open).length;
   const trPct = trTotal > 0 ? Math.round((trDone / trTotal) * 100) : 0;
 
-  const checks = state.periodicChecks;
-  const chOverdue = checks.filter(c => c.status === 'gecikti').length;
-  const chSoon = checks.filter(c => c.status === 'yaklasiyor').length;
-  const chDone = checks.filter(c => c.status === 'tamamlandi').length;
+  const chRank = { gecikti: 3, yaklasiyor: 2, tamamlandi: 0 };
+  const chByPerson = {};
+  state.periodicChecks.forEach(c => {
+    const k = personKey(c); if (!k) return;
+    const r = chRank[c.status] ?? 1;
+    if (chByPerson[k] === undefined || r > chByPerson[k]) chByPerson[k] = r;
+  });
+  const chPeople = Object.values(chByPerson);
+  const chTotal = chPeople.length;
+  const chOverdue = chPeople.filter(r => r === 3).length;
+  const chSoon = chPeople.filter(r => r === 2).length;
+  const chOther = chPeople.filter(r => r === 1).length;
+  const chDone = chPeople.filter(r => r === 0).length;
 
   const reports = state.allReports;
   const repNew = reports.filter(r => r.status === 'yeni').length;
@@ -2061,26 +2085,27 @@ function adminDashboardView() {
       ${miniStat('trending-down', 'Esnek Bakiyesi Eksi', flexNegative, 'gold')}
     </div>`, 'lg:col-span-2');
 
-  const trainingCard = cardShell('Eğitim Durumu', 'graduation-cap', '#/admin/trainings', trTotal === 0
-    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Henüz eğitim kaydı yüklenmedi.</p>`
+  const trainingCard = cardShell('Eğitim Durumu (kişi)', 'graduation-cap', '#/admin/trainings', trTotal === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Panelinizdeki çalışanlara bağlı eğitim kaydı yok.</p>`
     : `<div class="mb-3 flex items-end justify-between">
          <p class="font-display text-3xl font-bold text-ink-900 dark:text-sand-50">%${trPct}</p>
-         <p class="text-xs text-ink-800/50 dark:text-sand-100/45">${trDone} / ${trTotal} tamamlandı</p>
+         <p class="text-xs text-ink-800/50 dark:text-sand-100/45">${trDone} / ${trTotal} kişi tamamladı</p>
        </div>
        <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-sand-100 dark:bg-ink-900"><div class="h-full rounded-full bg-pine-600" style="width:${trPct}%"></div></div>
        <div class="space-y-2">
-         ${statusRow('Tamamlandı', trDone, 'bg-pine-600')}
-         ${statusRow('Tamamlanmadı', trOpen, 'bg-gold-500')}
-         ${statusRow('Süresi geçmiş', trOverdue, 'bg-brick-500')}
+         ${statusRow('Tüm eğitimleri tamam', trDone + ' kişi', 'bg-pine-600')}
+         ${statusRow('Eksik eğitimi var', trOpen + ' kişi', 'bg-gold-500')}
+         ${statusRow('Süresi geçmiş eğitimi var', trOverdue + ' kişi', 'bg-brick-500')}
        </div>`);
 
-  const checkCard = cardShell('Periyodik Kontroller', 'stethoscope', '#/admin/periodic-checks', checks.length === 0
-    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Henüz periyodik kontrol kaydı yüklenmedi.</p>`
+  const checkCard = cardShell('Periyodik Kontroller (kişi)', 'stethoscope', '#/admin/periodic-checks', chTotal === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Panelinizdeki çalışanlara bağlı periyodik kontrol kaydı yok.</p>`
     : `<div class="space-y-2">
-         ${statusRow('Gecikmiş', chOverdue, 'bg-brick-500')}
-         ${statusRow('Yaklaşıyor', chSoon, 'bg-gold-500')}
-         ${statusRow('Tamamlandı', chDone, 'bg-pine-600')}
-         ${statusRow('Toplam kayıt', checks.length, 'bg-ink-800/40')}
+         ${statusRow('Gecikmiş', chOverdue + ' kişi', 'bg-brick-500')}
+         ${statusRow('Yaklaşıyor', chSoon + ' kişi', 'bg-gold-500')}
+         ${chOther > 0 ? statusRow('Revir / hastane bekleyen', chOther + ' kişi', 'bg-gold-500') : ''}
+         ${statusRow('Tamamlandı', chDone + ' kişi', 'bg-pine-600')}
+         ${statusRow('Kaydı olan toplam', chTotal + ' kişi', 'bg-ink-800/40')}
        </div>`);
 
   const reportsCard = cardShell('Son Öneri / Ramak Kala / Proje', 'alert-triangle', '#/admin/reports', latestReports.length === 0
@@ -2110,7 +2135,7 @@ function adminDashboardView() {
   <div class="grid gap-4 lg:grid-cols-4">
     ${personnelCard}
     ${countTile('Yeni Bildirimler', 'alert-triangle', repNew, `${repReview} inceleniyor`, 'brick', '#/admin/reports')}
-    ${countTile('Süresi Geçmiş Eğitim', 'graduation-cap', trOverdue, `${trOpen} tamamlanmamış`, 'gold', '#/admin/trainings')}
+    ${countTile('Süresi Geçmiş Eğitimi Olan', 'graduation-cap', trOverdue, `kişi · ${trOpen + trOverdue} kişide eksik eğitim var`, 'gold', '#/admin/trainings')}
   </div>
 
   <div class="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
