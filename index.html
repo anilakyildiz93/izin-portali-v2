@@ -941,7 +941,7 @@ async function render() {
   } else if (route === '#/admin') {
     title = 'Genel Bakış';
     subtitle = 'Yönetici Paneli';
-    await Promise.all([loadEmployees(), loadAnnouncements()]);
+    await Promise.all([loadEmployees(), loadAnnouncements(), loadAllTrainings(), loadAllPeriodicChecks(), loadAllReports(), loadAllAbsences()]);
     content = adminDashboardView();
   } else if (route === '#/admin/employees') {
     title = 'Çalışanlar';
@@ -1977,18 +1977,153 @@ function adminDashboardView() {
       <td class="py-3">${leaveBar(e.annual_leave_total, e.annual_leave_used, true)}</td>
     </tr>`).join('');
 
+  // ---- Kart verileri ----
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const onLeaveToday = state.absences.filter(a => a.start_date && a.start_date <= todayStr && (a.end_date || a.start_date) >= todayStr);
+  const sickCount = employees.filter(e => e.on_sick_leave).length;
+  const flexNegative = employees.filter(e => (e.flex_time_balance ?? 0) < 0).length;
+
+  const trainings = state.trainings;
+  const trTotal = trainings.length;
+  const trDone = trainings.filter(t => normalizeKey(t.completion_status || '').includes('tamamlandi')).length;
+  const trOverdue = trainings.filter(t => normalizeKey(t.due_status || '').includes('gecen')).length;
+  const trOpen = Math.max(trTotal - trDone, 0);
+  const trPct = trTotal > 0 ? Math.round((trDone / trTotal) * 100) : 0;
+
+  const checks = state.periodicChecks;
+  const chOverdue = checks.filter(c => c.status === 'gecikti').length;
+  const chSoon = checks.filter(c => c.status === 'yaklasiyor').length;
+  const chDone = checks.filter(c => c.status === 'tamamlandi').length;
+
+  const reports = state.allReports;
+  const repNew = reports.filter(r => r.status === 'yeni').length;
+  const repReview = reports.filter(r => r.status === 'inceleniyor').length;
+  const latestReports = reports.slice(0, 5);
+
+  const miniStat = (icon, label, value, accent) => {
+    const a = {
+      pine: 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300',
+      gold: 'bg-gold-500/10 text-gold-600 dark:text-gold-400',
+      brick: 'bg-brick-500/10 text-brick-600 dark:text-brick-500'
+    }[accent];
+    return `
+      <div class="flex items-center gap-3">
+        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${a}"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+        <div class="min-w-0">
+          <p class="font-display text-2xl font-bold leading-none text-ink-900 dark:text-sand-50">${value}</p>
+          <p class="mt-1 text-xs text-ink-800/55 dark:text-sand-100/50">${label}</p>
+        </div>
+      </div>`;
+  };
+  const cardShell = (title, icon, href, body, cls = '') => `
+    <div class="card flex flex-col p-5 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5 ${cls}">
+      <div class="mb-4 flex items-center justify-between gap-2">
+        <h3 class="flex items-center gap-2 font-display text-sm font-semibold text-ink-900 dark:text-sand-50">
+          <i data-lucide="${icon}" class="w-4 h-4 text-ink-800/50 dark:text-sand-100/50"></i>${title}
+        </h3>
+        ${href ? `<a href="${href}" class="flex items-center gap-1 text-xs font-medium text-pine-700 dark:text-gold-400 hover:underline">Yönet <i data-lucide="arrow-right" class="w-3 h-3"></i></a>` : ''}
+      </div>
+      ${body}
+    </div>`;
+  const countTile = (title, icon, value, hint, accent, href) => {
+    const a = {
+      pine: 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300',
+      gold: 'bg-gold-500/10 text-gold-600 dark:text-gold-400',
+      brick: 'bg-brick-500/10 text-brick-600 dark:text-brick-500'
+    }[accent];
+    return `
+    <a href="${href}" class="card flex flex-col items-center justify-center gap-2 p-5 text-center bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5 hover:-translate-y-0.5 transition-transform">
+      <div class="flex h-11 w-11 items-center justify-center rounded-full ${a}"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+      <p class="font-display text-3xl font-bold text-ink-900 dark:text-sand-50">${value}</p>
+      <p class="text-xs font-semibold text-ink-900 dark:text-sand-50">${title}</p>
+      <p class="text-[11px] text-ink-800/50 dark:text-sand-100/45">${hint}</p>
+    </a>`;
+  };
+  const statusRow = (label, value, colorCls) => `
+    <div class="flex items-center justify-between rounded-lg bg-sand-100/60 dark:bg-ink-900/60 px-3 py-2 text-sm">
+      <span class="flex items-center gap-2 text-ink-800/75 dark:text-sand-100/70"><span class="h-2 w-2 rounded-full ${colorCls}"></span>${label}</span>
+      <span class="font-semibold text-ink-900 dark:text-sand-50">${value}</span>
+    </div>`;
+  const reportStatusBadge = (st) => ({
+    yeni: 'bg-brick-500/10 text-brick-600 dark:text-brick-500',
+    inceleniyor: 'bg-gold-500/10 text-gold-600 dark:text-gold-400',
+    kapatildi: 'bg-pine-50 text-pine-700 dark:bg-pine-900/40 dark:text-pine-300'
+  }[st] || 'bg-sand-100 text-ink-800');
+  const reportStatusLabel = { yeni: 'Yeni', inceleniyor: 'İnceleniyor', kapatildi: 'Kapatıldı' };
+
+  const personnelCard = cardShell('Personel Bilgileri Kartı', 'users', '#/admin/employees', `
+    <div class="grid grid-cols-2 gap-x-4 gap-y-5">
+      ${miniStat('user-check', 'Toplam Çalışan', total, 'pine')}
+      ${miniStat('building-2', 'Departman', departments, 'gold')}
+      ${miniStat('calendar-x', 'Bugün İzinli / Devamsız', onLeaveToday.length, 'brick')}
+      ${miniStat('stethoscope', 'Raporlu', sickCount, 'brick')}
+      ${miniStat('palmtree', 'Ort. İzin Kullanımı', '%' + avgUsage, 'gold')}
+      ${miniStat('trending-down', 'Esnek Bakiyesi Eksi', flexNegative, 'gold')}
+    </div>`, 'lg:col-span-2');
+
+  const trainingCard = cardShell('Eğitim Durumu', 'graduation-cap', '#/admin/trainings', trTotal === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Henüz eğitim kaydı yüklenmedi.</p>`
+    : `<div class="mb-3 flex items-end justify-between">
+         <p class="font-display text-3xl font-bold text-ink-900 dark:text-sand-50">%${trPct}</p>
+         <p class="text-xs text-ink-800/50 dark:text-sand-100/45">${trDone} / ${trTotal} tamamlandı</p>
+       </div>
+       <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-sand-100 dark:bg-ink-900"><div class="h-full rounded-full bg-pine-600" style="width:${trPct}%"></div></div>
+       <div class="space-y-2">
+         ${statusRow('Tamamlandı', trDone, 'bg-pine-600')}
+         ${statusRow('Tamamlanmadı', trOpen, 'bg-gold-500')}
+         ${statusRow('Süresi geçmiş', trOverdue, 'bg-brick-500')}
+       </div>`);
+
+  const checkCard = cardShell('Periyodik Kontroller', 'stethoscope', '#/admin/periodic-checks', checks.length === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Henüz periyodik kontrol kaydı yüklenmedi.</p>`
+    : `<div class="space-y-2">
+         ${statusRow('Gecikmiş', chOverdue, 'bg-brick-500')}
+         ${statusRow('Yaklaşıyor', chSoon, 'bg-gold-500')}
+         ${statusRow('Tamamlandı', chDone, 'bg-pine-600')}
+         ${statusRow('Toplam kayıt', checks.length, 'bg-ink-800/40')}
+       </div>`);
+
+  const reportsCard = cardShell('Son Öneri / Ramak Kala / Proje', 'alert-triangle', '#/admin/reports', latestReports.length === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Henüz bildirim yok.</p>`
+    : `<div class="divide-y divide-black/5 dark:divide-white/5">
+        ${latestReports.map(r => `
+          <div class="flex items-center justify-between gap-2 py-2">
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(r.submitter_name || '—')}</p>
+              <p class="truncate text-xs text-ink-800/45 dark:text-sand-100/40">${escapeHtml(REPORT_TYPE_LABELS[r.type] || r.type || '')} · ${escapeHtml(r.created_at ? fmtDate(r.created_at) : '')}</p>
+            </div>
+            <span class="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${reportStatusBadge(r.status)}">${reportStatusLabel[r.status] || r.status}</span>
+          </div>`).join('')}
+      </div>`);
+
+  const leaveTodayCard = cardShell('Bugün İzinli / Devamsız', 'calendar-x', '#/admin/absences', onLeaveToday.length === 0
+    ? `<p class="text-xs text-ink-800/45 dark:text-sand-100/40">Bugün için kayıtlı izin/devamsızlık yok.</p>`
+    : `<div class="max-h-60 overflow-auto divide-y divide-black/5 dark:divide-white/5">
+        ${onLeaveToday.slice(0, 30).map(a => `
+          <div class="flex items-center justify-between gap-2 py-2">
+            <p class="truncate text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(a.employee_name || a.registry_number)}</p>
+            <span class="shrink-0 text-xs text-ink-800/60 dark:text-sand-100/50">${escapeHtml(a.leave_type || '')}</span>
+          </div>`).join('')}
+      </div>`);
+
   return `
-  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    ${statCard('users', 'Toplam Çalışan', total, '', 'pine')}
-    ${statCard('palmtree', 'Ort. İzin Kullanım Oranı', '%' + avgUsage, '', 'gold')}
-    ${statCard('megaphone', 'Toplam Duyuru', state.announcements.length, '', 'brick')}
-    ${statCard('trending-up', 'Departman Sayısı', departments, '', 'pine')}
+  <div class="grid gap-4 lg:grid-cols-4">
+    ${personnelCard}
+    ${countTile('Yeni Bildirimler', 'alert-triangle', repNew, `${repReview} inceleniyor`, 'brick', '#/admin/reports')}
+    ${countTile('Süresi Geçmiş Eğitim', 'graduation-cap', trOverdue, `${trOpen} tamamlanmamış`, 'gold', '#/admin/trainings')}
+  </div>
+
+  <div class="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+    ${trainingCard}
+    ${checkCard}
+    ${reportsCard}
+    ${leaveTodayCard}
   </div>
 
   ${deptEntries.length > 0 ? `
   <div class="mt-8">
     <h2 class="mb-4 font-display text-base font-semibold text-ink-900 dark:text-sand-50">Departmanlara Göre Çalışan Sayısı</h2>
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       ${deptEntries.map(([name, count], i) =>
         statCard('users', name, count, `toplam ${total} çalışanın ${Math.round((count / total) * 100)}%'i`, deptAccentOrder[i % 3])
       ).join('')}
